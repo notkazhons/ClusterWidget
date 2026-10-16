@@ -1049,6 +1049,27 @@ internal sealed unsafe class Widget
         if (tileHit) Launch(_downTile);
     }
 
+    /// <summary>
+    /// Shortcut files (.lnk, .url) are copied into the app's own folder and the cluster uses the copy, so deleting the original
+    /// from the desktop never breaks the cluster. Programs, folders and other files are referenced where they are.
+    /// </summary>
+    private static string KeepCopy(string path)
+    {
+        string ext = Path.GetExtension(path);
+        if (!ext.Equals(".lnk", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".url", StringComparison.OrdinalIgnoreCase)) return path;
+        try
+        {
+            string dir = Path.Combine(Config.RootDir, "shortcuts");
+            if (path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)) return path; // already ours
+            Directory.CreateDirectory(dir);
+            string name = Path.GetFileNameWithoutExtension(path), dst = Path.Combine(dir, name + ext);
+            for (int n = 2; File.Exists(dst); n++) dst = Path.Combine(dir, $"{name} ({n}){ext}");
+            File.Copy(path, dst);
+            return dst;
+        }
+        catch (Exception) { return path; } // could not copy: fall back to pointing at the original
+    }
+
     private void AddFiles(nint drop)
     {
         uint count = Native.DragQueryFile(drop, 0xFFFFFFFF, null, 0);
@@ -1057,7 +1078,7 @@ internal sealed unsafe class Widget
             uint len = Native.DragQueryFile(drop, k, null, 0);
             var buf = new char[len + 1];
             fixed (char* p = buf) Native.DragQueryFile(drop, k, p, len + 1);
-            var item = new Item { Path = new string(buf, 0, (int)len) };
+            var item = new Item { Path = KeepCopy(new string(buf, 0, (int)len)) };
             _cfg.Items.Add(item);
             _slots.Add(new Slot { Item = item });
         }

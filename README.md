@@ -25,7 +25,7 @@ while idle, ~2 MB exe.
 - A new cluster always appears in the middle of the screen.
 - With no more items than the closed count, clicking an icon launches it directly.
 - It survives **Win+D**: the window is owned by the desktop, so it is raised together with it.
-- Drop files, folders or shortcuts on it to add them. Right-click: settings / remove item / new or delete cluster / exit.
+- Drop files, folders or shortcuts on it to add them. Dropped `.lnk` / `.url` shortcuts are **copied** into `%APPDATA%\ClusterWidget\shortcuts` and the cluster uses the copy, so deleting the original from your desktop never breaks it (programs and folders are referenced by path). Right-click: settings / remove item / new or delete cluster / exit.
 
 ## Settings window
 Opens from the **gear** (shown while the pointer is over the cluster), the right-click menu or the **tray icon** (hidden-icons
