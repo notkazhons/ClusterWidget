@@ -73,6 +73,8 @@ internal sealed unsafe class Widget
     private float _animFrom;
     private long _animStart;
     private bool _pressed, _dragging, _tracking, _inMenu, _downGear, _hoverGear, _inside, _allowZ;
+    private bool _dead;                    // destroyed: must never write its file again (that would resurrect a deleted cluster)
+    private int _itemDrag = -1, _itemDragTarget = -1, _itemDragX, _itemDragY;   // reordering icons by dragging them in the expanded view
     private bool _preview, _gearPreview;      // settings-window toggles: hold the cluster open / show the settings icon
     private POINT _downPt, _grab;
     private int _downTile, _hover = -1;
@@ -115,6 +117,7 @@ internal sealed unsafe class Widget
 
     public void Destroy()
     {
+        _dead = true;
         Map.Remove(_hwnd);
         if (_hwnd != 0) Native.DestroyWindow(_hwnd);
         _hwnd = 0;
@@ -218,6 +221,7 @@ internal sealed unsafe class Widget
     /// <summary>Writes the cluster's file now.</summary>
     public void SaveNow()
     {
+        if (_dead) return;
         _cfg.Save();
         _stamp = SafeWriteTime();
     }
@@ -358,7 +362,9 @@ internal sealed unsafe class Widget
         int ow = (int)Math.Ceiling(_w1), oh = (int)Math.Ceiling(_h1);
         var open = _stickyTopLeft is POINT tl
             ? Layout.Clamp(new CellRect(tl.X, tl.Y, Math.Min(Math.Max(ow, bw), workW), Math.Min(Math.Max(oh, bh), workH)), bounds)
-            : Layout.Expand(closed, ow, oh, bounds);
+            : _cfg.ExpandFrom == "topLeft"
+                ? Layout.Clamp(new CellRect(closed.X, closed.Y, Math.Min(Math.Max(ow, bw), workW), Math.Min(Math.Max(oh, bh), workH)), bounds)
+                : Layout.Expand(closed, ow, oh, bounds);
         _pa = new RECT { Left = closed.X, Top = closed.Y, Right = closed.Right, Bottom = closed.Bottom };
         _pe = new RECT { Left = open.X, Top = open.Y, Right = open.Right, Bottom = open.Bottom };
 
@@ -748,7 +754,74 @@ internal sealed unsafe class Widget
         long tTiles = Perf.On ? Perf.Start() : 0;
         for (int i = 0; i < visible; i++) DrawTile(i, TileRect(i, _t));
         if (Perf.On) _pIcons.Add(Perf.Ms(tTiles));
+        if (_itemDrag >= 0 && _itemDrag < _slots.Count) DrawItemDrag();
         if (GearVisible) DrawGear();
+    }
+
+    /// <summary>While re-ordering: an outline on the slot the icon will take, and the icon itself following the pointer.</summary>
+    private void DrawItemDrag()
+    {
+        if (_itemDragTarget >= 0 && _itemDragTarget != _itemDrag)
+        {
+            var r = TileRect(_itemDragTarget, _t);
+            float pad = Math.Max(2f, _gapO / 2f);
+            nint hp = RoundRect(r.X - pad, r.Y - pad, r.W + pad * 2, r.H + pad * 2, MathF.Min(Radius * 0.5f, 14 * _u));
+            Gdip.GdipCreatePen1(WithAlpha(_outlineArgb, 0.9f), MathF.Max(2f, 2.5f * _u), 2, out nint pen);
+            Gdip.GdipFillPath(_g, _brushHover, hp);
+            Gdip.GdipDrawPath(_g, pen, hp);
+            Gdip.GdipDeletePen(pen);
+            Gdip.GdipDeletePath(hp);
+        }
+        var img = _slots[_itemDrag].Image;
+        if (img != null) DrawIcon(img, _itemDragX - _iconPx / 2f, _itemDragY - _iconPx / 2f, _iconPx, 0.85f);
+    }
+
+    /// <summary>Moves an icon to another position in the cluster (the others shift to make room).</summary>
+    private void MoveItem(int from, int to)
+    {
+        var item = _cfg.Items[from]; var slot = _slots[from];
+        _cfg.Items.RemoveAt(from); _slots.RemoveAt(from);
+        _cfg.Items.Insert(to, item); _slots.Insert(to, slot);
+        SaveNow();
+        Recompute();
+        Frame();
+    }
+
+    /// <summary>Orders the icons by name (or reverses the current order).</summary>
+    public void SortItems(int mode)
+    {
+        var order = new List<(Item Item, Slot Slot)>();
+        for (int i = 0; i < _slots.Count; i++) order.Add((_cfg.Items[i], _slots[i]));
+        if (mode == 2) order.Reverse();
+        else
+        {
+            order.Sort((a, b) => string.Compare(a.Item.DisplayName, b.Item.DisplayName, StringComparison.CurrentCultureIgnoreCase));
+            if (mode == 1) order.Reverse();
+        }
+        _cfg.Items.Clear(); _slots.Clear();
+        foreach (var (item, slot) in order) { _cfg.Items.Add(item); _slots.Add(slot); }
+        SaveNow();
+        Recompute();
+        Frame();
+    }
+
+    /// <summary>Puts the closed box in the middle of the primary monitor's work area.</summary>
+    public void CenterOnScreen()
+    {
+        var mi = default(MONITORINFO); mi.cbSize = (uint)sizeof(MONITORINFO);
+        Native.GetMonitorInfo(Native.MonitorFromPoint(default, 1), ref mi);
+        int bw = _pa.Right - _pa.Left, bh = _pa.Bottom - _pa.Top;
+        int x = (mi.rcWork.Left + mi.rcWork.Right - bw) / 2, y = (mi.rcWork.Top + mi.rcWork.Bottom - bh) / 2;
+        if (_cfg.Snap)
+        {
+            int gap = (int)(_cfg.Gap * _scale);
+            _cfg.X = (int)Math.Round((x - gap - _ox) / (double)_cw);
+            _cfg.Y = (int)Math.Round((y - gap - _oy) / (double)_ch);
+        }
+        else { _cfg.FreeX = x; _cfg.FreeY = y; }
+        Relayout();
+        Frame();
+        SaveNow();
     }
 
     private void DrawEmptySlot((float X, float Y, float W, float H) r, float alpha)
@@ -764,7 +837,7 @@ internal sealed unsafe class Widget
     private void DrawTile(int i, (float X, float Y, float W, float H) r)
     {
         var slot = _slots[i];
-        if (i == _hover)
+        if (i == _hover && _itemDrag < 0)
         {
             float inset = -Math.Max(2f, LerpF(_gapC, _gapO, _t) / 2f);
             nint hp = RoundRect(r.X + inset, r.Y + inset, r.W - inset * 2, r.H - inset * 2, MathF.Min(Radius * 0.5f, 14 * _u));
@@ -1077,6 +1150,19 @@ internal sealed unsafe class Widget
                 if (_pressed)
                 {
                     Native.GetCursorPos(out POINT now);
+                    // expanded: dragging an icon re-orders the cluster
+                    if (_target == 1 && _t > 0.99f && _downTile >= 0 && _downTile < _slots.Count && !_downGear)
+                    {
+                        if (_itemDrag < 0 && Math.Abs(now.X - _downPt.X) + Math.Abs(now.Y - _downPt.Y) >= (int)(6 * _scale)) _itemDrag = _downTile;
+                        if (_itemDrag >= 0)
+                        {
+                            _itemDragX = CanvasX(lp); _itemDragY = CanvasY(lp);
+                            int over = HitTile(_itemDragX, _itemDragY);
+                            _itemDragTarget = over >= 0 && over < _slots.Count ? over : -1;
+                            Frame();
+                        }
+                        return 0;
+                    }
                     if (!_dragging && !_downGear && _target == 0 && _t == 0f
                         && Math.Abs(now.X - _downPt.X) + Math.Abs(now.Y - _downPt.Y) >= (int)(4 * _scale))
                     {
@@ -1120,6 +1206,14 @@ internal sealed unsafe class Widget
 
             case Native.WM_LBUTTONUP:
             {
+                if (_itemDrag >= 0)
+                {
+                    int from = _itemDrag, to = _itemDragTarget;
+                    _itemDrag = -1; _itemDragTarget = -1; _pressed = false;
+                    Native.ReleaseCapture();
+                    if (to >= 0 && to != from) MoveItem(from, to); else Frame();
+                    return 0;
+                }
                 bool wasDrag = _dragging;
                 _pressed = false; _dragging = false;
                 Native.ReleaseCapture();

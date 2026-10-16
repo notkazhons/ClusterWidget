@@ -57,6 +57,8 @@ internal sealed class Config
     /// </summary>
     public int BoxCols { get; set; } = 0;
     public int BoxRows { get; set; } = 0;
+    /// <summary>Where the expanded view grows from: center (even growth all round) or topLeft (the top-left corner stays put and it grows right and down).</summary>
+    public string ExpandFrom { get; set; } = "center";
     /// <summary>Multiplier on the Windows desktop icon size.</summary>
     public float IconScale { get; set; } = 1f;
     /// <summary>Space between the box edge and the icons, closed. Pixels at 100%.</summary>
@@ -165,7 +167,7 @@ internal sealed class Config
     /// <summary>Copies everything that is "design" (look, layout, settings icon) from <paramref name="d"/>; keeps items, name and position.</summary>
     public void ApplyDesign(Config d)
     {
-        ClosedCount = d.ClosedCount; BoxCols = d.BoxCols; BoxRows = d.BoxRows; IconScale = d.IconScale;
+        ExpandFrom = d.ExpandFrom; ClosedCount = d.ClosedCount; BoxCols = d.BoxCols; BoxRows = d.BoxRows; IconScale = d.IconScale;
         ClosedPadding = d.ClosedPadding; ClosedGap = d.ClosedGap; OpenPadding = d.OpenPadding; OpenGap = d.OpenGap; Gap = d.Gap;
         Opacity = d.Opacity; Tint = d.Tint; Blur = d.Blur; OutlineColor = d.OutlineColor; OutlineOpacity = d.OutlineOpacity;
         OutlineWidth = d.OutlineWidth; CornerRadius = d.CornerRadius;
@@ -182,6 +184,7 @@ internal sealed class Config
     private void Sanitize()
     {
         Name ??= "Cluster";
+        ExpandFrom = ExpandFrom?.Equals("topLeft", StringComparison.OrdinalIgnoreCase) == true ? "topLeft" : "center";
         ClosedCount = Math.Clamp(ClosedCount, 1, 16);
         BoxCols = Math.Clamp(BoxCols, 0, 20);
         BoxRows = Math.Clamp(BoxRows, 0, 20);

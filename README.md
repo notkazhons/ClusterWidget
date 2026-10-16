@@ -19,6 +19,10 @@ while idle, ~2 MB exe.
 - **Expanded:** click it. It grows only as much as the items need, evenly on each axis, shifted back inside the work
   area. Esc or clicking elsewhere closes it. Tiles are exactly as wide as icons, so spacing 0 means icons touching,
   like the closed box. *Name size* sets the text under the icons.
+- **Re-order:** drag an icon onto another slot in the expanded view; it moves there and the rest shift. *A to Z*, *Z to A* and *Reverse* are on the Icons tab.
+- **Expand from:** center (default) or the top-left corner, which stays exactly where it is while the cluster grows right and down.
+  Use the same padding and spacing for closed and expanded to keep the icons themselves in place too.
+- A new cluster always appears in the middle of the screen.
 - With no more items than the closed count, clicking an icon launches it directly.
 - It survives **Win+D**: the window is owned by the desktop, so it is raised together with it.
 - Drop files, folders or shortcuts on it to add them. Right-click: settings / remove item / new or delete cluster / exit.
@@ -46,6 +50,7 @@ re-blending them; only the rounded corners are re-drawn.
 
 | key | meaning |
 |---|---|
+| `expandFrom` | `center` or `topLeft` |
 | `snap`, `x`, `y`, `freeX`, `freeY` | grid snapping, top-left cell (snapped) or pixel (free) |
 | `closedCount`, `boxCols`, `boxRows`, `iconScale`, `clusterPreview` | icons shown closed, icons per row / column (0 = auto), icon size, last slot = mini preview |
 | `backgroundImage`, `imageOpacity`, `imageOverlayColor`, `imageOverlayOpacity`, `imageZoom`, `imagePanX`, `imagePanY` | box picture, its opacity, overlay color and opacity, zoom %, position % |

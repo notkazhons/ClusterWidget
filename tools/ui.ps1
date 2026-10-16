@@ -57,9 +57,10 @@ switch ($Do) {
     'click' { Click $Rest[0] $Rest[1] }
     'rclick' { Click $Rest[0] $Rest[1] $true }
     'drag' {
-        [Ui]::SetCursorPos([int]$Rest[0], [int]$Rest[1]); Start-Sleep -Milliseconds 250; [Ui]::mouse_event(2,0,0,0,0)
+        $x1 = [int]$Rest[0]; $y1 = [int]$Rest[1]; $x2 = [int]$Rest[2]; $y2 = [int]$Rest[3]
+        [Ui]::SetCursorPos($x1, $y1); Start-Sleep -Milliseconds 250; [Ui]::mouse_event(2,0,0,0,0)
         $steps = 12
-        for ($i = 1; $i -le $steps; $i++) { [Ui]::SetCursorPos([int]($Rest[0] + ($Rest[2] - $Rest[0]) * $i / $steps), [int]($Rest[1] + ($Rest[3] - $Rest[1]) * $i / $steps)); Start-Sleep -Milliseconds 30 }
+        for ($i = 1; $i -le $steps; $i++) { [Ui]::SetCursorPos([int]($x1 + ($x2 - $x1) * $i / $steps), [int]($y1 + ($y2 - $y1) * $i / $steps)); Start-Sleep -Milliseconds 30 }
         [Ui]::mouse_event(4,0,0,0,0); Start-Sleep -Milliseconds 500
     }
     'move' { [Ui]::SetCursorPos([int]$Rest[0], [int]$Rest[1]); Start-Sleep -Milliseconds 500 }

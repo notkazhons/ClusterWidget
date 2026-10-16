@@ -85,13 +85,12 @@ internal static unsafe class App
         {
             cfg.ApplyDesign(basis.Cfg);
             cfg.Snap = basis.Cfg.Snap;
-            cfg.X = basis.Cfg.X + 3; cfg.Y = basis.Cfg.Y + 1;
-            cfg.FreeX = basis.Cfg.FreeX + 80; cfg.FreeY = basis.Cfg.FreeY + 60;
         }
         cfg.Save();
         var w = new Widget(cfg);
         Widgets.Add(w);
         w.Create();
+        w.CenterOnScreen(); // a new cluster always appears in the middle of the screen
         return w;
     }
 
