@@ -1045,7 +1045,14 @@ internal sealed unsafe class Widget
             if (tileHit) { Launch(_downTile); if (!_preview) Collapse(); }
             return;
         }
-        if (Clustered) { Expand(); return; }
+        if (Clustered)
+        {
+            // With the option on, a normal icon still opens its app; only the mini preview slot (or the box itself) opens the cluster.
+            bool previewSlot = _cfg.ClusterPreview && _downTile == _ke - 1;
+            if (_cfg.ClickLaunches && tileHit && !previewSlot) { Launch(_downTile); return; }
+            Expand();
+            return;
+        }
         if (tileHit) Launch(_downTile);
     }
 

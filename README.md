@@ -23,7 +23,7 @@ while idle, ~2 MB exe.
 - **Expand from:** center (default) or the top-left corner, which stays exactly where it is while the cluster grows right and down.
   Use the same padding and spacing for closed and expanded to keep the icons themselves in place too.
 - A new cluster always appears in the middle of the screen.
-- With no more items than the closed count, clicking an icon launches it directly.
+- With no more items than the closed count, clicking an icon launches it directly. With more, any click opens the cluster, unless *Clicking an icon opens the app* is on (Icons tab, `clickLaunches`): then normal icons launch and only the mini preview (or the empty box) opens it.
 - It survives **Win+D**: the window is owned by the desktop, so it is raised together with it.
 - Drop files, folders or shortcuts on it to add them. Dropped `.lnk` / `.url` shortcuts are **copied** into `%APPDATA%\ClusterWidget\shortcuts` and the cluster uses the copy, so deleting the original from your desktop never breaks it (programs and folders are referenced by path). Right-click: settings / remove item / new or delete cluster / exit.
 

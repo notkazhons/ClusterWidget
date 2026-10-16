@@ -23,7 +23,7 @@ internal sealed unsafe class SettingsWindow
     private const int IdCluster = 400, IdRename = 401, IdNewCluster = 402, IdDeleteCluster = 403,
         IdDesign = 410, IdSaveDesign = 411, IdDeleteDesign = 412, IdTab = 420,
         IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdAutoGrid = 304, IdStartup = 305, IdGear = 306, IdPreview = 311, IdGearPreview = 312,
-        IdApply = 313, IdCancel = 314, IdClusterPreview = 315, IdExpandFrom = 316, IdSortAz = 317, IdSortZa = 318, IdReverse = 319,
+        IdApply = 313, IdCancel = 314, IdClusterPreview = 315, IdExpandFrom = 316, IdClickLaunches = 320, IdSortAz = 317, IdSortZa = 318, IdReverse = 319,
         IdImgChoose = 307, IdImgClear = 308, IdGearAlways = 309, IdBase = 1000;
 
     private static readonly Def[] Defs =
@@ -79,7 +79,7 @@ internal sealed unsafe class SettingsWindow
 
     private Widget _w;
     private nint _hwnd, _font, _tab, _clusterCombo, _designCombo, _presetCombo, _gearCombo,
-        _snapCheck, _labelsCheck, _expandFromCombo, _autoGridCheck, _clusterPreviewCheck, _startupCheck, _gearAlwaysCheck, _imageName, _previewToggle, _gearToggle, _iconFont;
+        _snapCheck, _labelsCheck, _expandFromCombo, _clickLaunchCheck, _autoGridCheck, _clusterPreviewCheck, _startupCheck, _gearAlwaysCheck, _imageName, _previewToggle, _gearToggle, _iconFont;
     private readonly Dictionary<Widget, Config> _snaps = new();   // each edited cluster as it was when last applied (for Cancel)
     private float _s = 1f;
     private readonly List<nint>[] _pages = Enumerable.Range(0, PageNames.Length).Select(_ => new List<nint>()).ToArray();
@@ -303,6 +303,8 @@ internal sealed unsafe class SettingsWindow
         _clusterPreviewCheck = Ctl(PIcons, "BUTTON", "Last closed icon is a mini preview of the rest", 0x3 | 0x10000, PageX, y, 440, 24, IdClusterPreview);
         y = NextY(PIcons, 34);
         _labelsCheck = Ctl(PIcons, "BUTTON", "Show names when expanded", 0x3 | 0x10000, PageX, y, 340, 24, IdLabels);
+        y = NextY(PIcons, 34);
+        _clickLaunchCheck = Ctl(PIcons, "BUTTON", "Clicking an icon opens the app (only the preview opens the cluster)", 0x3 | 0x10000, PageX, y, 520, 24, IdClickLaunches);
         y = NextY(PIcons, 44);
         Ctl(PIcons, "STATIC", "Order (or drag icons)", 0, PageX, y + 6, 230, 20, 0);
         Ctl(PIcons, "BUTTON", "A to Z", 0x10000, PageX + 240, y, 76, 28, IdSortAz);
@@ -384,6 +386,7 @@ internal sealed unsafe class SettingsWindow
         bool autoGrid = !(cfg.BoxCols > 0 && cfg.BoxRows > 0);
         Native.SendMessage(_autoGridCheck, 0xF1, autoGrid ? 1 : 0, 0);
         Native.SendMessage(_clusterPreviewCheck, 0xF1, cfg.ClusterPreview ? 1 : 0, 0);
+        Native.SendMessage(_clickLaunchCheck, 0xF1, cfg.ClickLaunches ? 1 : 0, 0);
         UpdateEnabled(autoGrid);
         Native.SendMessage(_gearAlwaysCheck, 0xF1, cfg.GearAlways ? 1 : 0, 0);
         Native.SendMessage(_startupCheck, 0xF1, Native.StartsWithWindows() ? 1 : 0, 0);
@@ -704,6 +707,7 @@ internal sealed unsafe class SettingsWindow
             case IdGearPreview: _w.SetGearPreview(Native.SendMessage(_gearToggle, 0xF0, 0, 0) == 1); break;
             case IdApply: Apply(); break;
             case IdCancel: Cancel(); break;
+            case IdClickLaunches: cfg.ClickLaunches = Native.SendMessage(_clickLaunchCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); break;
             case IdClusterPreview: cfg.ClusterPreview = Native.SendMessage(_clusterPreviewCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); break;
             case IdAutoGrid:
                 if (Native.SendMessage(_autoGridCheck, 0xF0, 0, 0) == 1) { cfg.BoxCols = 0; cfg.BoxRows = 0; }

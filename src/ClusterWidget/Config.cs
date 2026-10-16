@@ -100,6 +100,8 @@ internal sealed class Config
     public int ImageOverlayOpacity { get; set; } = 0;
     /// <summary>When there are more icons than fit closed: true = the last closed slot is a mini 2x2 preview of the rest, false = just another icon.</summary>
     public bool ClusterPreview { get; set; } = true;
+    /// <summary>When there are more icons than fit closed: true = clicking a normal icon opens that app and only the mini preview (or empty box space) opens the cluster; false = any click opens the cluster.</summary>
+    public bool ClickLaunches { get; set; } = false;
     public bool ShowLabels { get; set; } = true;
     public string LabelColor { get; set; } = "#FFF2F2F2";
     /// <summary>Name size (expanded view) in pixels at 100% scaling.</summary>
@@ -171,7 +173,7 @@ internal sealed class Config
         ClosedPadding = d.ClosedPadding; ClosedGap = d.ClosedGap; OpenPadding = d.OpenPadding; OpenGap = d.OpenGap; Gap = d.Gap;
         Opacity = d.Opacity; Tint = d.Tint; Blur = d.Blur; OutlineColor = d.OutlineColor; OutlineOpacity = d.OutlineOpacity;
         OutlineWidth = d.OutlineWidth; CornerRadius = d.CornerRadius;
-        BackgroundImage = d.BackgroundImage; ImageOpacity = d.ImageOpacity; ImageOverlayColor = d.ImageOverlayColor; ImageOverlayOpacity = d.ImageOverlayOpacity; ClusterPreview = d.ClusterPreview; ImageZoom = d.ImageZoom; ImagePanX = d.ImagePanX; ImagePanY = d.ImagePanY;
+        BackgroundImage = d.BackgroundImage; ImageOpacity = d.ImageOpacity; ImageOverlayColor = d.ImageOverlayColor; ImageOverlayOpacity = d.ImageOverlayOpacity; ClusterPreview = d.ClusterPreview; ClickLaunches = d.ClickLaunches; ImageZoom = d.ImageZoom; ImagePanX = d.ImagePanX; ImagePanY = d.ImagePanY;
         ShowLabels = d.ShowLabels; LabelColor = d.LabelColor; LabelSize = d.LabelSize; FontFamily = d.FontFamily; HoverColor = d.HoverColor;
         AnimationMs = d.AnimationMs;
         GearCorner = d.GearCorner; GearSize = d.GearSize; GearOffsetX = d.GearOffsetX; GearOffsetY = d.GearOffsetY; GearAlways = d.GearAlways;
