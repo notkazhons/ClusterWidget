@@ -7,11 +7,18 @@ on:
   pull_request:
 
 permissions:
-  contents: write   # needed to attach the zip to a release
+  contents: write   # attach the zip to a release
+
+# Pipeline:  build (test + unsigned exe)  ->  sign (only when SignPath is configured, tags only)  ->  release (zip + upload)
+#
+# Signing is OFF until it is set up (see docs/CODE_SIGNING_SETUP.md). With nothing configured this builds and
+# releases the unsigned exe exactly as before.
 
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      unsigned-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,21 +29,86 @@ jobs:
       - name: Test
         run: dotnet test tests/ClusterWidget.Tests --nologo
 
-      - name: Package (Native AOT)
+      - name: Build (Native AOT)
         shell: pwsh
         run: |
           # the AOT compiler looks for vswhere on PATH
           $env:PATH += ";${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
-          ./tools/package.ps1
+          ./tools/package.ps1 -BuildOnly
+
+      # SignPath takes this artifact, signs ClusterWidget.exe inside it and hands it back
+      - name: Upload the unsigned exe
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: dist/exe/ClusterWidget.exe
+
+  sign:
+    needs: build
+    # only for release tags, and only once SignPath is configured (repository variables, see the setup doc)
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    runs-on: windows-latest
+    steps:
+      - name: Submit the signing request to SignPath
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ needs.build.outputs.unsigned-artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Keep the signed exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-exe
+          path: signed/**/ClusterWidget.exe
+
+  release:
+    needs: [build, sign]
+    # run when signing succeeded or was skipped (not configured); never when it failed
+    if: ${{ always() && needs.build.result == 'success' && (needs.sign.result == 'success' || needs.sign.result == 'skipped') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the unsigned exe
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-exe
+          path: exe
+
+      - name: Get the signed exe (when there is one)
+        if: ${{ needs.sign.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-exe
+          path: exe-signed
+
+      - name: Pack the zip
+        shell: pwsh
+        run: |
+          $exe = 'exe/ClusterWidget.exe'
+          if (Test-Path 'exe-signed') { $exe = (Get-ChildItem exe-signed -Recurse -Filter ClusterWidget.exe | Select-Object -First 1).FullName }
+          $sig = Get-AuthenticodeSignature $exe
+          "using $exe  (signature: $($sig.Status))"
+          if ('${{ needs.sign.result }}' -eq 'success' -and $sig.Status -ne 'Valid') { throw 'signing succeeded but the exe has no valid signature' }
+          ./tools/package.ps1 -ExePath $exe
 
       - uses: actions/upload-artifact@v4
         with:
           name: ClusterWidget-win-x64
-          path: dist/*
+          path: dist/*.zip*
 
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*.zip
+            dist/*.zip.sha256
           generate_release_notes: true

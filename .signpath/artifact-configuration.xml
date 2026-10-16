@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tells SignPath what to sign inside the artifact the build workflow uploads (GitHub zips a single uploaded file, so
+  ClusterWidget.exe sits at the top of the zip). Paste this into the artifact configuration of your SignPath project
+  (slug in the SIGNPATH_ARTIFACT_CONFIGURATION_SLUG variable). SignPath's reference for this format:
+  https://about.signpath.io/documentation/artifact-configuration  - check the attribute names there when you set it up.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="ClusterWidget.exe" product-name="ClusterWidget">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
