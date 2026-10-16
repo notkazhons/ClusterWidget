@@ -6,7 +6,6 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Code signing preparation: workflow stages for signing with SignPath (off until configured), a draft code signing policy and a maintainer checklist.
 - Keyboard navigation: Tab from the desktop enters the clusters, Tab / Shift+Tab / arrows move between icons, Enter opens the focused app, Esc returns to the desktop. A keyboard hook is only installed while the desktop is in front.
 
 ## [1.0.0] - 2026-10-16
