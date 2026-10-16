@@ -28,4 +28,9 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- keep the build machine's folder names out of the exe (the debug directory would otherwise hold the full path of the .pdb) -->
+    <LinkerArg Include="/PDBALTPATH:%_PDB%" />
+  </ItemGroup>
+
 </Project>
