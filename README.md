@@ -10,6 +10,13 @@
 </p>
 
 <p align="center">
+  <a href="../../releases/latest"><b>Download</b></a> &middot;
+  <a href="https://notkazhons.github.io/ClusterWidget/"><b>Website</b></a> &middot;
+  <a href="docs/CONFIG.md"><b>Config reference</b></a> &middot;
+  <a href="CHANGELOG.md"><b>Changelog</b></a>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/closed.png" height="210" alt="A closed cluster">
   <img src="docs/screenshots/expanded.png" height="210" alt="The same cluster expanded">
   <img src="docs/screenshots/picture.png" height="210" alt="A cluster with a picture background">
