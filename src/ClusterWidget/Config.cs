@@ -12,6 +12,7 @@ internal sealed class Item
     public string Path { get; set; } = "";
     public string? Name { get; set; }
 
+    [JsonIgnore]
     public string DisplayName
     {
         get
@@ -28,11 +29,26 @@ internal sealed class Item
 /// <summary>User settings, stored as JSON in %APPDATA%\ClusterWidget\config.json. Colors are #AARRGGBB or #RRGGBB.</summary>
 internal sealed class Config
 {
-    /// <summary>Top-left grid cell of the widget (desktop-icon cells, from the work-area corner).</summary>
+    /// <summary>True: the box snaps to the desktop icon grid. False: it moves freely, pixel by pixel.</summary>
+    public bool Snap { get; set; } = true;
+    /// <summary>Top-left grid cell when snapping (desktop-icon cells, from the work-area corner).</summary>
     public int X { get; set; } = 1;
     public int Y { get; set; } = 1;
-    /// <summary>Cell rows of the collapsed box (the width follows from the cell shape so it looks square).</summary>
-    public int BoxRows { get; set; } = 2;
+    /// <summary>Top-left screen pixel when moving freely.</summary>
+    public int FreeX { get; set; } = 100;
+    public int FreeY { get; set; } = 100;
+    /// <summary>How many icons the closed box shows (the last one becomes a preview of the rest when there are more).</summary>
+    public int ClosedCount { get; set; } = 4;
+    /// <summary>Scales the whole cluster (box, icons, spacing, text), in percent.</summary>
+    public int BoxScale { get; set; } = 100;
+    /// <summary>Space between the box edge and the icons, closed. Pixels at 100%.</summary>
+    public float ClosedPadding { get; set; } = 18f;
+    /// <summary>Space between icons, closed. Pixels at 100%.</summary>
+    public float ClosedGap { get; set; } = 12f;
+    /// <summary>Space between the box edge and the icons, expanded. Pixels at 100%.</summary>
+    public float OpenPadding { get; set; } = 14f;
+    /// <summary>Space between icons, expanded. Pixels at 100%.</summary>
+    public float OpenGap { get; set; } = 8f;
     /// <summary>Opacity of the whole square (blur + tint), 0-100. Lower it to see the desktop through the box.</summary>
     public int Opacity { get; set; } = 100;
     /// <summary>Color painted over the blur; its alpha is the tint strength.</summary>
@@ -90,13 +106,20 @@ internal sealed class Config
     public void ResetLook()
     {
         var d = new Config();
-        BoxRows = d.BoxRows; Opacity = d.Opacity; Tint = d.Tint; Blur = d.Blur; OutlineColor = d.OutlineColor; OutlineWidth = d.OutlineWidth;
+        ClosedCount = d.ClosedCount; BoxScale = d.BoxScale; ClosedPadding = d.ClosedPadding; ClosedGap = d.ClosedGap;
+        OpenPadding = d.OpenPadding; OpenGap = d.OpenGap;
+        Opacity = d.Opacity; Tint = d.Tint; Blur = d.Blur; OutlineColor = d.OutlineColor; OutlineWidth = d.OutlineWidth;
         CornerRadius = d.CornerRadius; IconScale = d.IconScale; ShowLabels = d.ShowLabels;
     }
 
     private void Sanitize()
     {
-        BoxRows = Math.Clamp(BoxRows, 2, 8);
+        ClosedCount = Math.Clamp(ClosedCount, 1, 16);
+        BoxScale = Math.Clamp(BoxScale, 40, 300);
+        ClosedPadding = Math.Clamp(ClosedPadding, 0f, 80f);
+        ClosedGap = Math.Clamp(ClosedGap, 0f, 80f);
+        OpenPadding = Math.Clamp(OpenPadding, 0f, 80f);
+        OpenGap = Math.Clamp(OpenGap, 0f, 80f);
         Blur = Math.Clamp(Blur, 0, 100);
         Opacity = Math.Clamp(Opacity, 0, 100);
         OutlineWidth = Math.Clamp(OutlineWidth, 0f, 20f);

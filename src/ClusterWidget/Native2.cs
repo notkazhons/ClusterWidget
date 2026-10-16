@@ -7,6 +7,15 @@ namespace ClusterWidget;
 internal struct SIZE { public int cx, cy; }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct ICONINFO { public int fIcon; public uint xHotspot, yHotspot; public nint hbmMask, hbmColor; }
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct RectI { public int X, Y, Width, Height; }
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct BitmapData { public uint Width, Height; public int Stride, PixelFormat; public nint Scan0, Reserved; }
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -31,8 +40,38 @@ internal struct CHOOSECOLOR
 [StructLayout(LayoutKind.Sequential)]
 internal struct INITCOMMONCONTROLSEX { public uint dwSize, dwICC; }
 
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal unsafe struct SHFILEINFO
+{
+    public nint hIcon; public int iIcon; public uint dwAttributes;
+    public fixed char szDisplayName[260];
+    public fixed char szTypeName[80];
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal unsafe struct NOTIFYICONDATA
+{
+    public uint cbSize; public nint hWnd; public uint uID, uFlags, uCallbackMessage; public nint hIcon;
+    public fixed char szTip[128];
+    public uint dwState, dwStateMask;
+    public fixed char szInfo[256];
+    public uint uVersion;
+    public fixed char szInfoTitle[64];
+    public uint dwInfoFlags;
+    public Guid guidItem;
+    public nint hBalloonIcon;
+}
+
 internal static unsafe partial class Native
 {
+    [LibraryImport("shell32.dll", EntryPoint = "SHGetFileInfoW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial nint SHGetFileInfo(string path, uint attrs, SHFILEINFO* info, uint size, uint flags);
+    [LibraryImport("shell32.dll")] public static partial int SHGetImageList(int list, in Guid riid, out nint ppv);
+    [LibraryImport("user32.dll")] public static partial int DestroyIcon(nint icon);
+    [LibraryImport("user32.dll")] public static partial int GetIconInfo(nint icon, out ICONINFO info);
+    [LibraryImport("shell32.dll", EntryPoint = "Shell_NotifyIconW")] public static partial int ShellNotifyIcon(uint msg, NOTIFYICONDATA* data);
+    [LibraryImport("user32.dll", EntryPoint = "RegisterWindowMessageW", StringMarshalling = StringMarshalling.Utf16)] public static partial uint RegisterWindowMessage(string s);
+
     [LibraryImport("user32.dll", SetLastError = true)]
     public static partial int UpdateLayeredWindow(nint h, nint hdcDst, POINT* pptDst, SIZE* size, nint hdcSrc, POINT* pptSrc, uint key, BLENDFUNCTION* blend, uint flags);
     [LibraryImport("user32.dll")] public static partial int MapWindowPoints(nint from, nint to, POINT* pts, uint count);
@@ -88,6 +127,10 @@ internal static unsafe partial class Native
 internal static unsafe partial class Gdip
 {
     [LibraryImport("gdiplus.dll", StringMarshalling = StringMarshalling.Utf16)] public static partial int GdipLoadImageFromFile(string path, out nint img);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipBitmapLockBits(nint bmp, in RectI rect, uint mode, int format, out BitmapData data);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipBitmapUnlockBits(nint bmp, in BitmapData data);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipCreateBitmapFromHICON(nint icon, out nint bmp);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipCreateHICONFromBitmap(nint bmp, out nint icon);
     [LibraryImport("gdiplus.dll")] public static partial int GdipFillRectangle(nint g, nint brush, float x, float y, float w, float h);
     [LibraryImport("gdiplus.dll")] public static partial int GdipGetImageWidth(nint img, out uint w);
     [LibraryImport("gdiplus.dll")] public static partial int GdipGetImageHeight(nint img, out uint h);

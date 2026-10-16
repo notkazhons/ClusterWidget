@@ -5,17 +5,20 @@ click to reveal the rest. Think phone-style folders. Built as a .NET Native AOT 
 while idle, ~2 MB exe.
 
 ## Behavior
-- **Icons are the same size as your desktop icons** (read from Explorer's icon-size setting, DPI scaled); the
-  *Icon size* slider multiplies that.
-- Snaps to the **desktop icon grid** (cell size read from the shell). Drag it to move; it snaps on every cell.
-- With more than 4 items, the 4th slot becomes a mini 2x2 preview of the rest. Click: it expands by only as many
-  whole cells as needed, split evenly on each axis and shifted back inside the work area (right edge grows left,
-  top-left corner grows right and down). Esc or clicking elsewhere collapses it.
-- With 4 or fewer items, clicking an icon launches it directly.
+- **Icons are the same size as your desktop icons** (read from Explorer's icon-size setting, DPI scaled); *Icon size*
+  and *Cluster size* scale from there. The box always fits its contents, so icons never overflow or float in empty space.
+- **Closed:** shows 1-16 icons (your choice). If there are more items, the last slot becomes a mini 2x2 preview of the rest.
+- **Snap to the desktop grid** (on by default): the box sits on desktop cells and grows to the next cell boundary.
+  Turn it off to place the box anywhere, pixel by pixel.
+- **Expanded:** click it. It grows only as much as the items need, evenly on each axis, shifted back inside the work
+  area (right edge grows left, top-left corner grows right and down). Esc or clicking elsewhere closes it.
+- With no more items than the closed count, clicking an icon launches it directly.
+- Padding (box edge to icons) and spacing (between icons) are separate sliders for closed and expanded, plus
+  Compact / Cozy / Roomy presets for the closed box (padding never smaller than spacing).
 - It survives **Win+D**: the window is owned by the desktop, so it is raised together with it.
 - Drop files, folders or shortcuts on it to add them. Right-click: settings / reload / open config / remove item / exit.
-- The small **gear** in the corner opens the settings window (live preview): blur, opacity, tint strength and color,
-  outline color and thickness, corner roundness, icon size, names on/off.
+- The **gear** appears in the corner only while the pointer is over the cluster, and opens the settings window (live
+  preview). The same window opens from the **tray icon** (it lives in the hidden-icons flyout, no taskbar button).
 
 ## How the look works
 The wallpaper never changes while the widget sits on the desktop, so the blur is computed once (reduced
@@ -28,10 +31,11 @@ radius are all free sliders, and why nothing runs while idle. Only the wallpaper
 
 | key | meaning |
 |---|---|
-| `x`, `y` | top-left grid cell |
-| `boxRows` | cell rows of the collapsed box (width follows the cell shape) |
+| `snap`, `x`, `y`, `freeX`, `freeY` | grid snapping, top-left cell (snapped) or pixel (free) |
+| `closedCount`, `boxScale`, `iconScale` | icons shown closed, cluster size %, icon size |
+| `closedPadding`, `closedGap`, `openPadding`, `openGap` | spacing (px at 100%) |
 | `blur`, `opacity`, `tint`, `outlineColor`, `outlineWidth`, `cornerRadius`, `gap` | look |
-| `iconScale`, `showLabels`, `labelColor`, `labelSize`, `fontFamily`, `hoverColor` | tiles |
+| `showLabels`, `labelColor`, `labelSize`, `fontFamily`, `hoverColor` | labels |
 | `animationMs` | expand/collapse time (0 = instant) |
 | `items` | `[{ "path": "...", "name": "optional" }]`: files, folders, `.lnk`, `shell:AppsFolder\...` |
 

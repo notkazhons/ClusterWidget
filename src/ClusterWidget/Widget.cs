@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 
 namespace ClusterWidget;
 
-/// <summary>Reads the desktop icon grid the shell uses, so the widget snaps to the same cells.</summary>
+/// <summary>Reads the desktop icon grid the shell uses, so the widget can snap to the same cells.</summary>
 internal static class DesktopGrid
 {
     public static (int W, int H) CellSize()
@@ -32,13 +32,13 @@ internal static class DesktopGrid
 }
 
 /// <summary>
-/// The widget window: a layered child of the desktop (so Win+D leaves it alone) whose pixels are drawn by GDI+ into a
+/// The widget window: a per-pixel-alpha tool window owned by the desktop (so Win+D leaves it alone), drawn by GDI+ into a
 /// premultiplied DIB and pushed with UpdateLayeredWindow. Event-driven: timers only run while animating.
 /// </summary>
 internal sealed unsafe class Widget
 {
     private const nuint TimerAnim = 1, TimerReload = 2, TimerBackdrop = 3, TimerSave = 4;
-    private const uint WM_CONFIG_CHANGED = Native.WM_APP + 1;
+    private const uint WM_CONFIG_CHANGED = Native.WM_APP + 1, WM_TRAY = Native.WM_APP + 3;
 
     private sealed class Slot
     {
@@ -50,7 +50,8 @@ internal sealed unsafe class Widget
     private static Widget _self = null!;
 
     private Config _cfg;
-    private nint _hwnd;
+    private nint _hwnd, _trayIcon;
+    private uint _taskbarCreated;
     private nuint _gdipToken;
     private readonly List<Slot> _slots = new();
     private FileSystemWatcher? _watcher;
@@ -58,21 +59,23 @@ internal sealed unsafe class Widget
     private Backdrop? _backdrop;
     private RECT _monitor;
 
-    // grid + geometry (physical pixels)
-    private int _ox, _oy, _cw, _ch, _iconPx, _miniPx, _cols, _rows, _padX, _padY;
-    private float _scale = 1f;
-    private CellRect _bounds, _anchor, _expandedCells;
-    private RECT _pa, _pe; // collapsed / expanded rects, screen coords
+    // geometry, physical pixels. _u scales every authored pixel value (DPI x cluster size).
+    private int _ox, _oy, _cw, _ch;           // desktop grid origin and cell size
+    private float _scale = 1f, _u = 1f;
+    private int _iconPx, _miniPx, _tileW, _tileH;
+    private float _gapC, _padC, _gapO, _padO;
+    private int _ke, _ccols, _crows, _ecols, _erows; // closed count, closed grid, expanded grid
+    private float _w0, _h0, _w1, _h1;         // natural content size, closed / expanded
+    private RECT _pa, _pe;                    // closed / expanded window rects, screen coords
 
     // animation + input state
-    private float _t;       // 0 collapsed .. 1 expanded
+    private float _t;       // 0 closed .. 1 expanded
     private int _target;
     private float _animFrom;
     private long _animStart;
-    private bool _pressed, _dragging, _tracking, _inMenu, _downGear, _hoverGear;
+    private bool _pressed, _dragging, _tracking, _inMenu, _downGear, _hoverGear, _inside, _allowZ;
     private POINT _downPt, _grab;
     private int _downTile, _hover = -1;
-    private bool _allowZ;
 
     // drawing resources
     private nint _memDc, _dib, _bmp, _g;
@@ -97,11 +100,13 @@ internal sealed unsafe class Widget
         Frame();
         Native.ShowWindow(_hwnd, 4 /* SW_SHOWNOACTIVATE */);
         SendToBottom();
+        AddTrayIcon();
         StartWatcher();
         Trim();
 
         while (Native.GetMessage(out MSG m, 0, 0, 0) > 0) { Native.TranslateMessage(m); Native.DispatchMessage(m); }
 
+        RemoveTrayIcon();
         _watcher?.Dispose();
         FreeCanvas();
         FreeStyle();
@@ -142,6 +147,55 @@ internal sealed unsafe class Widget
             "ClusterWidget", Native.WS_POPUP, 0, 0, 100, 100, 0, 0, inst, 0);
         Native.SetWindowLongPtr(_hwnd, -8 /* GWLP_HWNDPARENT: sets the owner */, Native.GetShellWindow());
         Native.DragAcceptFiles(_hwnd, 1);
+        _taskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
+    }
+
+    // ---------------------------------------------------------------- tray icon (lives in the hidden-icons flyout until pinned)
+
+    private void AddTrayIcon()
+    {
+        if (_trayIcon == 0) _trayIcon = MakeTrayIcon();
+        NOTIFYICONDATA d = default;
+        d.cbSize = (uint)sizeof(NOTIFYICONDATA);
+        d.hWnd = _hwnd; d.uID = 1; d.uFlags = 0x7 /* MESSAGE | ICON | TIP */; d.uCallbackMessage = WM_TRAY; d.hIcon = _trayIcon;
+        const string tip = "Cluster widget";
+        for (int i = 0; i < tip.Length; i++) d.szTip[i] = tip[i];
+        Native.ShellNotifyIcon(0 /* NIM_ADD */, &d);
+    }
+
+    private void RemoveTrayIcon()
+    {
+        NOTIFYICONDATA d = default;
+        d.cbSize = (uint)sizeof(NOTIFYICONDATA); d.hWnd = _hwnd; d.uID = 1;
+        Native.ShellNotifyIcon(2 /* NIM_DELETE */, &d);
+        if (_trayIcon != 0) { Native.DestroyIcon(_trayIcon); _trayIcon = 0; }
+    }
+
+    /// <summary>A small rounded square with four dots, drawn once at startup.</summary>
+    private static nint MakeTrayIcon()
+    {
+        const int N = 32;
+        nint pixels = Marshal.AllocHGlobal(N * N * 4);
+        new Span<byte>((void*)pixels, N * N * 4).Clear();
+        Gdip.GdipCreateBitmapFromScan0(N, N, N * 4, Gdip.PixelFormat32bppPARGB, pixels, out nint bmp);
+        Gdip.GdipGetImageGraphicsContext(bmp, out nint g);
+        Gdip.GdipSetSmoothingMode(g, 4);
+        Gdip.GdipCreateSolidFill(0xFF4CC2FF, out nint blue);
+        Gdip.GdipCreateSolidFill(0xFFFFFFFF, out nint white);
+        nint body = RoundRect(2, 2, N - 4, N - 4, 9);
+        Gdip.GdipFillPath(g, blue, body);
+        Gdip.GdipDeletePath(body);
+        for (int k = 0; k < 4; k++)
+        {
+            nint dot = RoundRect(7 + k % 2 * 11, 7 + k / 2 * 11, 8, 8, 4);
+            Gdip.GdipFillPath(g, white, dot);
+            Gdip.GdipDeletePath(dot);
+        }
+        Gdip.GdipDeleteBrush(blue); Gdip.GdipDeleteBrush(white); Gdip.GdipDeleteGraphics(g);
+        Gdip.GdipCreateHICONFromBitmap(bmp, out nint icon);
+        Gdip.GdipDisposeImage(bmp);
+        Marshal.FreeHGlobal(pixels);
+        return icon;
     }
 
     // ---------------------------------------------------------------- config / slots
@@ -169,7 +223,7 @@ internal sealed unsafe class Widget
         _cfg.Save();
     }
 
-    /// <summary>Called by the settings window after it changed a look value.</summary>
+    /// <summary>Called by the settings window after it changed a value.</summary>
     public void LookChanged(bool blurChanged)
     {
         ApplyStyle();
@@ -178,6 +232,18 @@ internal sealed unsafe class Widget
         if (blurChanged) Native.SetTimer(_hwnd, TimerBackdrop, 70, 0); // sliders fire fast: rebuild once they settle
         Frame();
         Native.SetTimer(_hwnd, TimerSave, 500, 0);
+    }
+
+    /// <summary>Called after the snap option flipped: carry the current position over so the box does not jump.</summary>
+    public void SnapToggled()
+    {
+        if (_cfg.Snap)
+        {
+            _cfg.X = (int)Math.Round((_pa.Left - (int)(_cfg.Gap * _scale) - _ox) / (double)_cw);
+            _cfg.Y = (int)Math.Round((_pa.Top - (int)(_cfg.Gap * _scale) - _oy) / (double)_ch);
+        }
+        else { _cfg.FreeX = _pa.Left; _cfg.FreeY = _pa.Top; }
+        LookChanged(false);
     }
 
     private void StartWatcher()
@@ -203,37 +269,83 @@ internal sealed unsafe class Widget
         Native.GetMonitorInfo(Native.MonitorFromPoint(default, 1), ref primary);
         _ox = primary.rcWork.Left; _oy = primary.rcWork.Top;
 
-        // Same size as the desktop icons (Explorer's own "icon size" setting, DPI scaled), times the user's multiplier.
+        // Same size as the desktop icons (Explorer's own "icon size" setting, DPI scaled), times the user's multipliers.
+        _u = _scale * _cfg.BoxScale / 100f;
         uint logical = Native.RegDword(@"Software\Microsoft\Windows\Shell\Bags\1\Desktop", "IconSize", out uint v) && v is >= 16 and <= 256 ? v : 48;
-        int px = Math.Max(16, (int)(logical * _scale * _cfg.IconScale));
+        int px = Math.Max(16, (int)(logical * _u * _cfg.IconScale));
         if (px != _iconPx)
         {
-            _iconPx = px; _miniPx = Math.Max(8, (int)(px * 0.44f));
+            _iconPx = px;
             foreach (var s in _slots) { s.Image?.Dispose(); s.Image = null; s.Failed = false; s.Mini?.Dispose(); s.Mini = null; s.MiniFailed = false; }
         }
+        _miniPx = Math.Max(8, (int)(px * 0.44f));
         Relayout();
     }
 
-    /// <summary>Reuses the cached grid and refreshes bounds, anchor and rects (cheap enough to run on every drag step).</summary>
+    /// <summary>Recomputes every size and rectangle from the config and the cached grid (cheap enough for each drag step).</summary>
     private void Relayout()
     {
-        var (cellsW, cellsH) = Layout.CollapsedCells(_cfg.BoxRows, _cw, _ch);
-        var center = new POINT { X = _ox + (_cfg.X + cellsW / 2) * _cw, Y = _oy + (_cfg.Y + cellsH / 2) * _ch };
+        _gapC = _cfg.ClosedGap * _u; _padC = _cfg.ClosedPadding * _u;
+        _gapO = _cfg.OpenGap * _u; _padO = _cfg.OpenPadding * _u;
+        float fontEm = MathF.Max(8f, _cfg.LabelSize * _u);
+        float labelH = _cfg.ShowLabels ? fontEm * 1.5f + 4 * _u : 0;
+        _tileW = Math.Max((int)(_iconPx * 1.45f), (int)(_iconPx + 12 * _u));
+        _tileH = (int)(_iconPx + labelH);
+
+        // closed grid: as square as the count allows
+        int n = _slots.Count;
+        _ke = Math.Clamp(n, 1, _cfg.ClosedCount);
+        _ccols = (int)Math.Ceiling(Math.Sqrt(_ke));
+        _crows = (_ke + _ccols - 1) / _ccols;
+        _w0 = _ccols * _iconPx + (_ccols - 1) * _gapC + 2 * _padC;
+        _h0 = _crows * _iconPx + (_crows - 1) * _gapC + 2 * _padC;
+
+        // which monitor are we on?
+        int gap = (int)(_cfg.Gap * _scale);
+        POINT center = _cfg.Snap
+            ? new POINT { X = _ox + _cfg.X * _cw + (int)(_w0 / 2), Y = _oy + _cfg.Y * _ch + (int)(_h0 / 2) }
+            : new POINT { X = _cfg.FreeX + (int)(_w0 / 2), Y = _cfg.FreeY + (int)(_h0 / 2) };
         var mi = default(MONITORINFO); mi.cbSize = (uint)sizeof(MONITORINFO);
         Native.GetMonitorInfo(Native.MonitorFromPoint(center, 1), ref mi);
         _monitor = mi.rcMonitor;
-        int bx = (int)Math.Ceiling((mi.rcWork.Left - _ox) / (double)_cw), by = (int)Math.Ceiling((mi.rcWork.Top - _oy) / (double)_ch);
-        int bw = (int)Math.Floor((mi.rcWork.Right - _ox) / (double)_cw) - bx, bh = (int)Math.Floor((mi.rcWork.Bottom - _oy) / (double)_ch) - by;
-        _bounds = new CellRect(bx, by, Math.Max(bw, cellsW), Math.Max(bh, cellsH));
+        int workW = mi.rcWork.Right - mi.rcWork.Left, workH = mi.rcWork.Bottom - mi.rcWork.Top;
 
-        (_cols, _rows) = Layout.TileGrid(_slots.Count, _bounds.W, _bounds.H, _cw, _ch);
-        _anchor = Layout.Clamp(new CellRect(_cfg.X, _cfg.Y, cellsW, cellsH), _bounds);
-        _cfg.X = _anchor.X; _cfg.Y = _anchor.Y;
-        _expandedCells = Layout.Expand(_anchor, _cols, _rows, _bounds);
-        _padX = (_expandedCells.W - _cols) / 2;
-        _padY = (_expandedCells.H - _rows) / 2;
-        _pa = PixelRect(_anchor);
-        _pe = PixelRect(_expandedCells);
+        // expanded grid: shaped like the tiles' pixel proportions, capped to the work area
+        int pitchW = _tileW + (int)_gapO, pitchH = _tileH + (int)_gapO;
+        int maxCols = Math.Max(2, (int)((workW - 2 * _padO + _gapO) / pitchW));
+        int maxRows = Math.Max(2, (int)((workH - 2 * _padO + _gapO) / pitchH));
+        (_ecols, _erows) = Layout.TileGrid(n, maxCols, maxRows, pitchW, pitchH);
+        _w1 = _ecols * _tileW + (_ecols - 1) * _gapO + 2 * _padO;
+        _h1 = _erows * _tileH + (_erows - 1) * _gapO + 2 * _padO;
+
+        if (_cfg.Snap)
+        {
+            // whole desktop cells: the box grows to the next cell boundary and the content stays centred
+            var bounds = new CellRect(
+                (int)Math.Ceiling((mi.rcWork.Left - _ox) / (double)_cw), (int)Math.Ceiling((mi.rcWork.Top - _oy) / (double)_ch),
+                0, 0);
+            bounds = bounds with
+            {
+                W = (int)Math.Floor((mi.rcWork.Right - _ox) / (double)_cw) - bounds.X,
+                H = (int)Math.Floor((mi.rcWork.Bottom - _oy) / (double)_ch) - bounds.Y,
+            };
+            int cellsW = Math.Max(1, (int)Math.Ceiling((_w0 + 2 * gap) / _cw)), cellsH = Math.Max(1, (int)Math.Ceiling((_h0 + 2 * gap) / _ch));
+            int ecellsW = Math.Max(cellsW, (int)Math.Ceiling((_w1 + 2 * gap) / _cw)), ecellsH = Math.Max(cellsH, (int)Math.Ceiling((_h1 + 2 * gap) / _ch));
+            bounds = bounds with { W = Math.Max(bounds.W, cellsW), H = Math.Max(bounds.H, cellsH) };
+            var anchor = Layout.Clamp(new CellRect(_cfg.X, _cfg.Y, cellsW, cellsH), bounds);
+            _cfg.X = anchor.X; _cfg.Y = anchor.Y;
+            _pa = PixelRect(anchor, gap);
+            _pe = PixelRect(Layout.Expand(anchor, ecellsW, ecellsH, bounds), gap);
+        }
+        else
+        {
+            var bounds = new CellRect(mi.rcWork.Left, mi.rcWork.Top, workW, workH);
+            var free = Layout.Clamp(new CellRect(_cfg.FreeX, _cfg.FreeY, (int)Math.Ceiling(_w0), (int)Math.Ceiling(_h0)), bounds);
+            _cfg.FreeX = free.X; _cfg.FreeY = free.Y;
+            var open = Layout.Expand(free, (int)Math.Ceiling(_w1), (int)Math.Ceiling(_h1), bounds);
+            _pa = new RECT { Left = free.X, Top = free.Y, Right = free.Right, Bottom = free.Bottom };
+            _pe = new RECT { Left = open.X, Top = open.Y, Right = open.Right, Bottom = open.Bottom };
+        }
 
         EnsureCanvas(_pe.Right - _pe.Left, _pe.Bottom - _pe.Top);
         EnsureFont();
@@ -248,15 +360,11 @@ internal sealed unsafe class Widget
         _backdrop = Backdrop.Build(_monitor, _cfg.Blur, _cfg.Opacity / 100f);
     }
 
-    private RECT PixelRect(CellRect c)
+    private RECT PixelRect(CellRect c, int gap) => new()
     {
-        int gap = (int)(_cfg.Gap * _scale);
-        return new RECT
-        {
-            Left = _ox + c.X * _cw + gap, Top = _oy + c.Y * _ch + gap,
-            Right = _ox + c.Right * _cw - gap, Bottom = _oy + c.Bottom * _ch - gap,
-        };
-    }
+        Left = _ox + c.X * _cw + gap, Top = _oy + c.Y * _ch + gap,
+        Right = _ox + c.Right * _cw - gap, Bottom = _oy + c.Bottom * _ch - gap,
+    };
 
     private RECT Current() => new()
     {
@@ -266,31 +374,34 @@ internal sealed unsafe class Widget
 
     private static int Lerp(int a, int b, float t) => (int)MathF.Round(a + (b - a) * t);
     private static float LerpF(float a, float b, float t) => a + (b - a) * t;
-    private float Radius => _cfg.CornerRadius * _scale;
+    private float Radius => _cfg.CornerRadius * _u;
 
     // ---------------------------------------------------------------- tiles
 
-    private int ShownCount => Math.Min(_slots.Count, _cols * _rows);
-    private bool Clustered => _slots.Count > Layout.VisibleSlots;
-    private int VisibleSlots => _t <= 0.001f ? Layout.VisibleSlots : Math.Max(ShownCount, Layout.VisibleSlots);
+    private int ShownCount => Math.Min(_slots.Count, _ecols * _erows);
+    private bool Clustered => _slots.Count > _ke;
+    private int VisibleSlots => _t <= 0.001f ? _ke : Math.Max(ShownCount, _ke);
 
     /// <summary>Tile rect in canvas coordinates (origin = expanded rect's top-left) at expansion <paramref name="t"/>.</summary>
     private (float X, float Y, float W, float H) TileRect(int i, float t)
     {
-        float ex = _ox + (_expandedCells.X + _padX + i % _cols) * _cw - _pe.Left;
-        float ey = _oy + (_expandedCells.Y + _padY + i / _cols) * _ch - _pe.Top;
-        if (i >= Layout.VisibleSlots) return (ex, ey, _cw, _ch);
-        float sw = (_pa.Right - _pa.Left) / 2f, sh = (_pa.Bottom - _pa.Top) / 2f;
-        float cx = _pa.Left + i % 2 * sw - _pe.Left, cy = _pa.Top + i / 2 * sh - _pe.Top;
-        return (LerpF(cx, ex, t), LerpF(cy, ey, t), LerpF(sw, _cw, t), LerpF(sh, _ch, t));
+        float offX1 = ((_pe.Right - _pe.Left) - _w1) / 2f, offY1 = ((_pe.Bottom - _pe.Top) - _h1) / 2f;
+        float ex = offX1 + _padO + i % _ecols * (_tileW + _gapO);
+        float ey = offY1 + _padO + i / _ecols * (_tileH + _gapO);
+        if (i >= _ke) return (ex, ey, _tileW, _tileH);
+        float offX0 = ((_pa.Right - _pa.Left) - _w0) / 2f, offY0 = ((_pa.Bottom - _pa.Top) - _h0) / 2f;
+        float cx = _pa.Left - _pe.Left + offX0 + _padC + i % _ccols * (_iconPx + _gapC);
+        float cy = _pa.Top - _pe.Top + offY0 + _padC + i / _ccols * (_iconPx + _gapC);
+        return (LerpF(cx, ex, t), LerpF(cy, ey, t), LerpF(_iconPx, _tileW, t), LerpF(_iconPx, _tileH, t));
     }
 
     private int HitTile(int canvasX, int canvasY)
     {
+        float slop = Math.Max(2f, LerpF(_gapC, _gapO, _t) / 2f);
         for (int i = 0; i < VisibleSlots; i++)
         {
             var r = TileRect(i, _t);
-            if (canvasX >= r.X && canvasX < r.X + r.W && canvasY >= r.Y && canvasY < r.Y + r.H) return i;
+            if (canvasX >= r.X - slop && canvasX < r.X + r.W + slop && canvasY >= r.Y - slop && canvasY < r.Y + r.H + slop) return i;
         }
         return -1;
     }
@@ -298,14 +409,15 @@ internal sealed unsafe class Widget
     private (float X, float Y, float S) GearRect()
     {
         RECT cur = Current();
-        float s = 18 * _scale, m = 10 * _scale;
+        float s = 16 * _u, m = 7 * _u;
         return (cur.Right - _pe.Left - s - m, cur.Top - _pe.Top + m, s);
     }
 
     private bool HitGear(int canvasX, int canvasY)
     {
+        if (!_inside) return false; // the gear only exists while the pointer is over the cluster
         var g = GearRect();
-        float pad = 6 * _scale;
+        float pad = 5 * _u;
         return canvasX >= g.X - pad && canvasX < g.X + g.S + pad && canvasY >= g.Y - pad && canvasY < g.Y + g.S + pad;
     }
 
@@ -369,14 +481,14 @@ internal sealed unsafe class Widget
 
     private void EnsureFont()
     {
-        float em = MathF.Max(8f, _cfg.LabelSize * _scale);
+        float em = MathF.Max(8f, _cfg.LabelSize * _u);
         if (_font != 0 && MathF.Abs(em - _fontEm) < 0.5f) return;
         if (_font != 0) Gdip.GdipDeleteFont(_font);
         Gdip.GdipCreateFont(_fontFamily, em, 0, 2 /* pixel */, out _font);
         _fontEm = em;
         if (_gearFont != 0) Gdip.GdipDeleteFont(_gearFont);
         _gearFont = 0;
-        if (_gearFamily != 0) Gdip.GdipCreateFont(_gearFamily, 16 * _scale, 0, 2, out _gearFont);
+        if (_gearFamily != 0) Gdip.GdipCreateFont(_gearFamily, 14 * _u, 0, 2, out _gearFont);
     }
 
     private static nint RoundRect(float x, float y, float w, float h, float r)
@@ -421,7 +533,7 @@ internal sealed unsafe class Widget
         float cx = cur.Left - _pe.Left, cy = cur.Top - _pe.Top, cwid = cur.Right - cur.Left, chei = cur.Bottom - cur.Top;
         float radius = MathF.Min(Radius, MathF.Min(cwid, chei) / 2);
 
-        // background: blurred wallpaper, then the tint on top (its alpha is the opacity)
+        // background: blurred wallpaper, then the tint on top
         nint bg = RoundRect(cx, cy, cwid, chei, radius);
         if (_backdrop != null)
         {
@@ -435,7 +547,7 @@ internal sealed unsafe class Widget
         Gdip.GdipDeleteBrush(tint);
         Gdip.GdipDeletePath(bg);
 
-        float ow = MathF.Max(0f, _cfg.OutlineWidth * _scale);
+        float ow = MathF.Max(0f, _cfg.OutlineWidth * _u);
         if (ow > 0)
         {
             Gdip.GdipCreatePen1(_outlineArgb, ow, 2, out nint pen);
@@ -445,21 +557,17 @@ internal sealed unsafe class Widget
             Gdip.GdipDeletePen(pen);
         }
 
-        int visible = VisibleSlots;
-        for (int i = 0; i < visible; i++)
-        {
-            var r = TileRect(i, _t);
-            if (i >= _slots.Count) DrawEmptySlot(r, 1f - _t);
-            else DrawTile(i, r);
-        }
-        DrawGear();
+        if (_slots.Count == 0) DrawEmptySlot(TileRect(0, _t), 1f - _t);
+        int visible = Math.Min(VisibleSlots, _slots.Count);
+        for (int i = 0; i < visible; i++) DrawTile(i, TileRect(i, _t));
+        if (_inside) DrawGear();
     }
 
     private void DrawEmptySlot((float X, float Y, float W, float H) r, float alpha)
     {
         if (alpha <= 0.01f) return;
-        float s = MathF.Min(r.W, r.H) * 0.1f, mx = r.X + r.W / 2, my = r.Y + r.H / 2;
-        Gdip.GdipCreatePen1(WithAlpha(_outlineArgb, 0.3f * alpha), MathF.Max(1.5f, 2f * _scale), 2, out nint pen);
+        float s = MathF.Min(r.W, r.H) * 0.12f, mx = r.X + r.W / 2, my = r.Y + r.H / 2;
+        Gdip.GdipCreatePen1(WithAlpha(_outlineArgb, 0.35f * alpha), MathF.Max(1.5f, 2f * _u), 2, out nint pen);
         Gdip.GdipDrawLine(_g, pen, mx - s, my, mx + s, my);
         Gdip.GdipDrawLine(_g, pen, mx, my - s, mx, my + s);
         Gdip.GdipDeletePen(pen);
@@ -470,18 +578,16 @@ internal sealed unsafe class Widget
         var slot = _slots[i];
         if (i == _hover)
         {
-            float inset = 4 * _scale;
-            nint hp = RoundRect(r.X + inset, r.Y + inset, r.W - inset * 2, r.H - inset * 2, MathF.Min(Radius * 0.5f, 14 * _scale));
+            float inset = -Math.Max(2f, LerpF(_gapC, _gapO, _t) / 2f);
+            nint hp = RoundRect(r.X + inset, r.Y + inset, r.W - inset * 2, r.H - inset * 2, MathF.Min(Radius * 0.5f, 14 * _u));
             Gdip.GdipFillPath(_g, _brushHover, hp);
             Gdip.GdipDeletePath(hp);
         }
 
-        float labelH = _cfg.ShowLabels ? _fontEm * 1.5f * _t : 0;
-        float top = r.Y + (r.H - _iconPx - labelH) / 2, left = r.X + (r.W - _iconPx) / 2;
-        bool cluster = i == Layout.VisibleSlots - 1 && Clustered;
-
+        float left = r.X + (r.W - _iconPx) / 2, top = r.Y;
+        bool cluster = i == _ke - 1 && Clustered;
         if (cluster) DrawCluster(i, left, top, 1f - _t);
-        float bigAlpha = cluster ? _t : (i < Layout.VisibleSlots ? 1f : _t);
+        float bigAlpha = cluster ? _t : (i < _ke ? 1f : _t);
         var img = GetImage(slot);
         if (img != null) DrawIcon(img, left, top, _iconPx, bigAlpha);
         else if (bigAlpha > 0.05f)
@@ -494,14 +600,14 @@ internal sealed unsafe class Widget
         if (_cfg.ShowLabels && _t > 0.02f)
         {
             Gdip.GdipCreateSolidFill(WithAlpha(_labelArgb, _t), out nint brush);
-            var rc = new RectF { X = r.X + 4 * _scale, Y = top + _iconPx + 3 * _scale, Width = r.W - 8 * _scale, Height = _fontEm * 1.6f };
+            var rc = new RectF { X = r.X, Y = top + _iconPx + 3 * _u, Width = r.W, Height = _fontEm * 1.6f };
             string name = slot.Item.DisplayName;
             Gdip.GdipDrawString(_g, name, name.Length, _font, rc, _strFmt, brush);
             Gdip.GdipDeleteBrush(brush);
         }
     }
 
-    /// <summary>The "folder" look of the 4th slot: a mini 2x2 preview of the items that did not fit.</summary>
+    /// <summary>The "folder" look of the last closed slot: a mini 2x2 preview of the items that did not fit.</summary>
     private void DrawCluster(int firstIndex, float left, float top, float alpha)
     {
         if (alpha <= 0.01f) return;
@@ -518,14 +624,11 @@ internal sealed unsafe class Widget
     {
         if (_gearFont == 0) return;
         var g = GearRect();
-        uint color = WithAlpha(_labelArgb, _hoverGear ? 0.95f : (_inside ? 0.55f : 0.28f));
-        Gdip.GdipCreateSolidFill(color, out nint brush);
-        var rc = new RectF { X = g.X - 4 * _scale, Y = g.Y - 2 * _scale, Width = g.S + 8 * _scale, Height = g.S + 6 * _scale };
+        Gdip.GdipCreateSolidFill(WithAlpha(_labelArgb, _hoverGear ? 0.95f : 0.6f), out nint brush);
+        var rc = new RectF { X = g.X - 4 * _u, Y = g.Y - 2 * _u, Width = g.S + 8 * _u, Height = g.S + 6 * _u };
         Gdip.GdipDrawString(_g, "", 1, _gearFont, rc, _strFmt, brush);
         Gdip.GdipDeleteBrush(brush);
     }
-
-    private bool _inside;
 
     private IconImage? GetImage(Slot s)
     {
@@ -556,7 +659,7 @@ internal sealed unsafe class Widget
     /// <summary>Drops icons that are only needed while expanded.</summary>
     private void UnloadHidden()
     {
-        int keep = Clustered ? Layout.VisibleSlots - 1 : Layout.VisibleSlots;
+        int keep = Clustered ? _ke - 1 : _ke;
         for (int i = keep; i < _slots.Count; i++) { _slots[i].Image?.Dispose(); _slots[i].Image = null; _slots[i].Failed = false; }
     }
 
@@ -705,9 +808,19 @@ internal sealed unsafe class Widget
 
     private nint WndProc(nint h, uint msg, nint wp, nint lp)
     {
+        if (msg == _taskbarCreated && _taskbarCreated != 0) { AddTrayIcon(); return 0; } // Explorer restarted
+
         switch (msg)
         {
             case Native.WM_ERASEBKGND: return 1;
+
+            case WM_TRAY:
+                switch ((uint)(lp & 0xFFFF))
+                {
+                    case 0x202 /* WM_LBUTTONUP */: SettingsWindow.Show(this); break;
+                    case 0x205 /* WM_RBUTTONUP */: ShowMenu(-1); break;
+                }
+                return 0;
 
             case Native.WM_MOUSEACTIVATE:
                 // Collapsed: a click must not raise the widget above other windows. Expanded: take focus (Esc, click-away).
@@ -772,8 +885,8 @@ internal sealed unsafe class Widget
             case Native.WM_MOUSELEAVE:
                 _tracking = false; _inside = false; _hoverGear = false;
                 _hover = -1;
-                if (_target == 0 && _t == 0f) UnloadHidden();
-                Frame();
+                if (_target == 0 && _t == 0f) { UnloadHidden(); Frame(); Trim(); }
+                else Frame();
                 return 0;
 
             case Native.WM_LBUTTONUP:
@@ -830,9 +943,17 @@ internal sealed unsafe class Widget
 
     private void DragTo(POINT cursor)
     {
-        int gap = (int)(_cfg.Gap * _scale);
-        _cfg.X = (int)Math.Round((cursor.X - _grab.X - gap - _ox) / (double)_cw);
-        _cfg.Y = (int)Math.Round((cursor.Y - _grab.Y - gap - _oy) / (double)_ch);
+        if (_cfg.Snap)
+        {
+            int gap = (int)(_cfg.Gap * _scale);
+            _cfg.X = (int)Math.Round((cursor.X - _grab.X - gap - _ox) / (double)_cw);
+            _cfg.Y = (int)Math.Round((cursor.Y - _grab.Y - gap - _oy) / (double)_ch);
+        }
+        else
+        {
+            _cfg.FreeX = cursor.X - _grab.X;
+            _cfg.FreeY = cursor.Y - _grab.Y;
+        }
         Relayout();
         Frame();
     }
