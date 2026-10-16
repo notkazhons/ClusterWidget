@@ -25,20 +25,20 @@ while idle, ~2 MB exe.
 - A new cluster always appears in the middle of the screen.
 - With no more items than the closed count, clicking an icon launches it directly. With more, any click opens the cluster, unless *Clicking an icon opens the app* is on (Icons tab, `clickLaunches`): then normal icons launch and only the mini preview (or the empty box) opens it.
 - It survives **Win+D**: the window is owned by the desktop, so it is raised together with it.
-- Drop files, folders or shortcuts on it to add them. Dropped `.lnk` / `.url` shortcuts are **copied** into `%APPDATA%\ClusterWidget\shortcuts` and the cluster uses the copy, so deleting the original from your desktop never breaks it (programs and folders are referenced by path). Right-click: settings / remove item / new or delete cluster / exit.
+- Hover an icon for its name and location. Drop files, folders or shortcuts on it to add them. Dropped `.lnk` / `.url` shortcuts are **copied** into `%APPDATA%\ClusterWidget\shortcuts` and the cluster uses the copy, so deleting the original from your desktop never breaks it (programs and folders are referenced by path). Right-click: settings / remove item / new or delete cluster / exit.
 
 ## Settings window
 Opens from the **gear** (shown while the pointer is over the cluster), the right-click menu or the **tray icon** (hidden-icons
-flyout, no taskbar button). Everything previews live; **Apply changes** saves, **Cancel** (or the window's X) puts it back.
+flyout, no taskbar button). Hover any control for a short explanation. Everything previews live; **Apply changes** saves
+(it is only available when there is something to apply), **Cancel** / **Esc** / the window's X puts everything back to your
+last Apply. The text next to the buttons says "Unsaved changes" or "All changes saved". Enter = Apply, Esc = Cancel, Tab moves between controls.
 
-- **Top:** cluster picker (Rename / New / Delete) and design picker (*Save as...* / Delete). A design is a named look +
-  layout + settings-icon setup that can be applied to any cluster; items and position are not part of it.
-- **View toggles:** *Expanded view* holds the cluster open (without covering the settings window) so you can see edits to
-  it; *Show settings icon* shows the gear while you place it. Both end when the window closes.
-- **Tabs:** Appearance (blur, opacity, tint, outline, corner roundness), Image (picture, opacity, a second **overlay
-  color** with its own opacity, zoom, position), Icons, Spacing (padding / spacing closed and expanded, presets),
-  Settings icon (corner or automatic, size, distance from the edge, always show), General (snap, start with Windows, reset).
-
+- **Top:** *Editing* (which cluster; Rename / New / Delete), *Design* (saved looks; Save as / Delete), *Preview* toggles
+  (*Expanded view* holds the cluster open so you can see edits to it; *Settings icon* shows the gear while you place it).
+- **Tabs:** **Look** (blur, opacity, tint, outline, corners), **Picture** (picture, opacity, overlay color + opacity, zoom,
+  position), **Icons** (automatic grid or icons per row / column, mini preview, click behaviour, sorting),
+  **Size and spacing** (icon size, name size, padding and spacing closed / expanded, presets, names on/off),
+  **Behavior** (snap, expand from, settings icon placement, start with Windows, reset), **About** (how everything works).
 ## How the look works
 The wallpaper never changes while the cluster sits on the desktop, so the blur is computed once (reduced resolution, box
 blur) and reused, instead of DWM re-blurring live. That is why blur, opacity and corner radius are all free sliders, and

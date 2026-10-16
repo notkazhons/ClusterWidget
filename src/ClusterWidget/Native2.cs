@@ -22,6 +22,9 @@ internal unsafe struct TCITEM { public uint mask, dwState, dwStateMask; public c
 internal struct NMHDR { public nint hwndFrom; public nuint idFrom; public int code; }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct TOOLINFO { public uint cbSize, uFlags; public nint hwnd; public nuint uId; public RECT rect; public nint hinst; public char* lpszText; public nint lParam, lpReserved; }
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct ICONINFO { public int fIcon; public uint xHotspot, yHotspot; public nint hbmMask, hbmColor; }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -115,6 +118,8 @@ internal static unsafe partial class Native
 
     [LibraryImport("gdi32.dll")] public static partial nint CreateSolidBrush(uint colorRef);
     [LibraryImport("gdi32.dll")] public static partial int SetBkMode(nint dc, int mode);
+    [LibraryImport("gdi32.dll")] public static partial uint SetBkColor(nint dc, uint colorRef);
+    [LibraryImport("gdi32.dll")] public static partial uint SetTextColor(nint dc, uint colorRef);
     [LibraryImport("gdi32.dll")] public static partial nint GetStockObject(int index);
     [LibraryImport("gdi32.dll", EntryPoint = "CreateFontW", StringMarshalling = StringMarshalling.Utf16)]
     public static partial nint CreateFont(int h, int w, int esc, int ori, int weight, uint italic, uint underline, uint strike, uint charset, uint outPrec, uint clipPrec, uint quality, uint pitch, string face);

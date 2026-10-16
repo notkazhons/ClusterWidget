@@ -3,63 +3,68 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 
 namespace ClusterWidget;
 
 /// <summary>
-/// The settings window (gear icon / tray icon). A cluster picker and design picker sit on top; the settings are split
-/// into tabs: Appearance, Image, Icons, Spacing, Settings icon, General. Everything applies live.
+/// The settings window (gear icon / tray icon). Top: which cluster you are editing, which saved design, and two preview
+/// toggles. Below: tabs (Look, Picture, Icons, Size and spacing, Behavior, About). Everything applies live; Apply keeps it,
+/// Cancel puts it back. Every control has hover help.
 /// </summary>
 internal sealed unsafe class SettingsWindow
 {
     private enum Kind { Slider, TintSwatch, OutlineSwatch, OverlaySwatch }
 
-    private sealed record Def(string Label, int Page, Kind Kind, int Min = 0, int Max = 0, string Unit = "",
+    private sealed record Def(string Label, int Page, Kind Kind, string Tip, int Min = 0, int Max = 0, string Unit = "",
         Func<Config, int>? Get = null, Action<Config, int>? Set = null, bool Blur = false, int? AutoAt = null);
 
-    private const int PAppearance = 0, PImage = 1, PIcons = 2, PSpacing = 3, PGear = 4, PGeneral = 5;
-    private static readonly string[] PageNames = { "Appearance", "Image", "Icons", "Spacing", "Settings icon", "General" };
+    private const int PLook = 0, PPicture = 1, PIcons = 2, PSize = 3, PBehavior = 4, PAbout = 5;
+    private static readonly string[] PageNames = { "Look", "Picture", "Icons", "Size and spacing", "Behavior", "About" };
 
-    private const int IdCluster = 400, IdRename = 401, IdNewCluster = 402, IdDeleteCluster = 403,
+    private const int IdApply = 1, IdCancel = 2,   // IDOK / IDCANCEL: Enter and Esc work like in any dialog
+        IdCluster = 400, IdRename = 401, IdNewCluster = 402, IdDeleteCluster = 403,
         IdDesign = 410, IdSaveDesign = 411, IdDeleteDesign = 412, IdTab = 420,
-        IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdAutoGrid = 304, IdStartup = 305, IdGear = 306, IdPreview = 311, IdGearPreview = 312,
-        IdApply = 313, IdCancel = 314, IdClusterPreview = 315, IdExpandFrom = 316, IdClickLaunches = 320, IdSortAz = 317, IdSortZa = 318, IdReverse = 319,
-        IdImgChoose = 307, IdImgClear = 308, IdGearAlways = 309, IdBase = 1000;
+        IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdAutoGrid = 304, IdStartup = 305, IdGear = 306,
+        IdImgChoose = 307, IdImgClear = 308, IdGearAlways = 309, IdPreview = 311, IdGearPreview = 312,
+        IdClusterPreview = 315, IdExpandFrom = 316, IdSortAz = 317, IdSortZa = 318, IdReverse = 319, IdClickLaunches = 320,
+        IdOpenFolder = 321, IdOpenFile = 322, IdBase = 1000;
 
     private static readonly Def[] Defs =
     {
-        // Appearance
-        new("Blur", PAppearance, Kind.Slider, 0, 80, "px", c => c.Blur, (c, v) => c.Blur = v, Blur: true),
-        new("Opacity", PAppearance, Kind.Slider, 0, 100, "%", c => c.Opacity, (c, v) => c.Opacity = v),
-        new("Tint strength", PAppearance, Kind.Slider, 0, 100, "%", c => (int)MathF.Round((Config.Color(c.Tint, 0x8C14181C) >> 24) / 2.55f),
+        // ---- Look
+        new("Blur", PLook, Kind.Slider, "How strongly the wallpaper behind the cluster is blurred. 0 shows it sharp.", 0, 80, "px", c => c.Blur, (c, v) => c.Blur = v, Blur: true),
+        new("Opacity", PLook, Kind.Slider, "How solid the whole box is. Lower it to see your desktop through the box.", 0, 100, "%", c => c.Opacity, (c, v) => c.Opacity = v),
+        new("Tint strength", PLook, Kind.Slider, "How much of the tint colour is painted over the blurred wallpaper.", 0, 100, "%",
+            c => (int)MathF.Round((Config.Color(c.Tint, 0x8C14181C) >> 24) / 2.55f),
             (c, v) => c.Tint = Config.ColorText(((uint)MathF.Round(v * 2.55f) << 24) | (Config.Color(c.Tint, 0x8C14181C) & 0xFFFFFF))),
-        new("Tint color", PAppearance, Kind.TintSwatch),
-        new("Outline color", PAppearance, Kind.OutlineSwatch),
-        new("Outline opacity", PAppearance, Kind.Slider, 0, 100, "%", c => c.OutlineOpacity, (c, v) => c.OutlineOpacity = v),
-        new("Outline thickness", PAppearance, Kind.Slider, 0, 12, "px", c => (int)MathF.Round(c.OutlineWidth), (c, v) => c.OutlineWidth = v),
-        new("Corner roundness", PAppearance, Kind.Slider, 0, 100, "px", c => (int)MathF.Round(c.CornerRadius), (c, v) => c.CornerRadius = v),
-        // Image (the picture sits on top of the tint color)
-        new("Picture opacity", PImage, Kind.Slider, 0, 100, "%", c => c.ImageOpacity, (c, v) => c.ImageOpacity = v),
-        new("Overlay color", PImage, Kind.OverlaySwatch),
-        new("Overlay opacity", PImage, Kind.Slider, 0, 100, "%", c => c.ImageOverlayOpacity, (c, v) => c.ImageOverlayOpacity = v),
-        new("Picture zoom", PImage, Kind.Slider, 100, 400, "%", c => c.ImageZoom, (c, v) => c.ImageZoom = v),
-        new("Picture position X", PImage, Kind.Slider, 0, 100, "%", c => c.ImagePanX, (c, v) => c.ImagePanX = v),
-        new("Picture position Y", PImage, Kind.Slider, 0, 100, "%", c => c.ImagePanY, (c, v) => c.ImagePanY = v),
-        // Icons
-        new("Icons when closed", PIcons, Kind.Slider, 1, 16, "", c => c.ClosedCount, (c, v) => c.ClosedCount = v),
-        new("Icons per row", PIcons, Kind.Slider, 0, 12, "", c => c.BoxCols, (c, v) => c.BoxCols = v, AutoAt: 0),
-        new("Icons per column", PIcons, Kind.Slider, 0, 12, "", c => c.BoxRows, (c, v) => c.BoxRows = v, AutoAt: 0),
-        new("Icon size", PIcons, Kind.Slider, 50, 200, "%", c => (int)MathF.Round(c.IconScale * 100), (c, v) => c.IconScale = v / 100f),
-        new("Name size", PIcons, Kind.Slider, 6, 24, "px", c => (int)MathF.Round(c.LabelSize), (c, v) => c.LabelSize = v),
-        // Spacing
-        new("Padding, closed", PSpacing, Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.ClosedPadding), (c, v) => c.ClosedPadding = v),
-        new("Spacing, closed", PSpacing, Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.ClosedGap), (c, v) => c.ClosedGap = v),
-        new("Padding, expanded", PSpacing, Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.OpenPadding), (c, v) => c.OpenPadding = v),
-        new("Spacing, expanded", PSpacing, Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.OpenGap), (c, v) => c.OpenGap = v),
-        // Settings icon
-        new("Size", PGear, Kind.Slider, 0, 40, "px", c => c.GearSize, (c, v) => c.GearSize = v, AutoAt: 0),
-        new("Distance from edge, X", PGear, Kind.Slider, -1, 120, "px", c => c.GearOffsetX, (c, v) => c.GearOffsetX = v, AutoAt: -1),
-        new("Distance from edge, Y", PGear, Kind.Slider, -1, 120, "px", c => c.GearOffsetY, (c, v) => c.GearOffsetY = v, AutoAt: -1),
+        new("Tint color", PLook, Kind.TintSwatch, "The colour painted over the blur. Click the square to choose one."),
+        new("Outline color", PLook, Kind.OutlineSwatch, "Colour of the line around the box. Click the square to choose one."),
+        new("Outline opacity", PLook, Kind.Slider, "How visible the outline is.", 0, 100, "%", c => c.OutlineOpacity, (c, v) => c.OutlineOpacity = v),
+        new("Outline thickness", PLook, Kind.Slider, "Thickness of the outline in pixels. 0 hides it.", 0, 12, "px", c => (int)MathF.Round(c.OutlineWidth), (c, v) => c.OutlineWidth = v),
+        new("Corner roundness", PLook, Kind.Slider, "How round the corners are. Large values make a pill or a circle.", 0, 100, "px", c => (int)MathF.Round(c.CornerRadius), (c, v) => c.CornerRadius = v),
+        // ---- Picture (sits on top of the tint colour)
+        new("Picture opacity", PPicture, Kind.Slider, "How visible the picture is over the tint colour.", 0, 100, "%", c => c.ImageOpacity, (c, v) => c.ImageOpacity = v),
+        new("Overlay color", PPicture, Kind.OverlaySwatch, "A second colour painted over the picture, for example a light white tint so icons stand out. Click the square to choose one."),
+        new("Overlay opacity", PPicture, Kind.Slider, "How strong the overlay colour is. 0 turns it off.", 0, 100, "%", c => c.ImageOverlayOpacity, (c, v) => c.ImageOverlayOpacity = v),
+        new("Zoom", PPicture, Kind.Slider, "Zoom into the picture. 100% just covers the box.", 100, 400, "%", c => c.ImageZoom, (c, v) => c.ImageZoom = v),
+        new("Position, left to right", PPicture, Kind.Slider, "Which part of a zoomed picture is shown (horizontally).", 0, 100, "%", c => c.ImagePanX, (c, v) => c.ImagePanX = v),
+        new("Position, top to bottom", PPicture, Kind.Slider, "Which part of a zoomed picture is shown (vertically).", 0, 100, "%", c => c.ImagePanY, (c, v) => c.ImagePanY = v),
+        // ---- Icons (the closed box)
+        new("Icons when closed", PIcons, Kind.Slider, "How many icons the closed box shows. Used when the automatic grid is on.", 1, 16, "", c => c.ClosedCount, (c, v) => c.ClosedCount = v),
+        new("Icons per row", PIcons, Kind.Slider, "Columns of the closed box. Used when the automatic grid is off.", 0, 12, "", c => c.BoxCols, (c, v) => c.BoxCols = v, AutoAt: 0),
+        new("Icons per column", PIcons, Kind.Slider, "Rows of the closed box. Used when the automatic grid is off.", 0, 12, "", c => c.BoxRows, (c, v) => c.BoxRows = v, AutoAt: 0),
+        // ---- Size and spacing
+        new("Icon size", PSize, Kind.Slider, "Icon size as a percentage of your Windows desktop icon size.", 50, 200, "%", c => (int)MathF.Round(c.IconScale * 100), (c, v) => c.IconScale = v / 100f),
+        new("Name size", PSize, Kind.Slider, "Size of the names shown under icons in the expanded view.", 6, 24, "px", c => (int)MathF.Round(c.LabelSize), (c, v) => c.LabelSize = v),
+        new("Padding, closed", PSize, Kind.Slider, "Space between the box edge and the icons when closed.", 0, 60, "px", c => (int)MathF.Round(c.ClosedPadding), (c, v) => c.ClosedPadding = v),
+        new("Spacing, closed", PSize, Kind.Slider, "Space between icons when closed. 0 makes them touch.", 0, 60, "px", c => (int)MathF.Round(c.ClosedGap), (c, v) => c.ClosedGap = v),
+        new("Padding, expanded", PSize, Kind.Slider, "Space between the box edge and the icons when expanded.", 0, 60, "px", c => (int)MathF.Round(c.OpenPadding), (c, v) => c.OpenPadding = v),
+        new("Spacing, expanded", PSize, Kind.Slider, "Space between icons when expanded. 0 makes them touch.", 0, 60, "px", c => (int)MathF.Round(c.OpenGap), (c, v) => c.OpenGap = v),
+        // ---- Behavior > settings icon
+        new("Size", PBehavior, Kind.Slider, "Size of the settings icon. Auto scales with your icons.", 0, 40, "px", c => c.GearSize, (c, v) => c.GearSize = v, AutoAt: 0),
+        new("Distance from edge, X", PBehavior, Kind.Slider, "How far the settings icon is from the left or right edge. Auto picks a distance for you.", -1, 120, "px", c => c.GearOffsetX, (c, v) => c.GearOffsetX = v, AutoAt: -1),
+        new("Distance from edge, Y", PBehavior, Kind.Slider, "How far the settings icon is from the top or bottom edge. Auto picks a distance for you.", -1, 120, "px", c => c.GearOffsetY, (c, v) => c.GearOffsetY = v, AutoAt: -1),
     };
 
     // Closed-box spacing presets: (name, padding, gap). Padding is never smaller than the gap, so icons never sit
@@ -68,26 +73,49 @@ internal sealed unsafe class SettingsWindow
 
     private static readonly (string Name, string Value)[] Corners =
     {
-        ("Automatic (no overlap)", "auto"), ("Top right", "topRight"), ("Top left", "topLeft"),
+        ("Automatic (never overlaps an icon)", "auto"), ("Top right", "topRight"), ("Top left", "topLeft"),
         ("Bottom right", "bottomRight"), ("Bottom left", "bottomLeft"),
     };
 
-    private const int RowH = 40, PageX = 32, TrackX = 190, TrackW = 280, ValueX = 476;
+    private const string AboutText =
+        "ClusterWidget puts small boxes of shortcuts on your desktop. Each box is a CLUSTER. Closed, it shows a few icons; open it to see them all.\r\n\r\n" +
+        "USING A CLUSTER\r\n" +
+        "- Click it to open it. Press Esc or click anywhere else to close it.\r\n" +
+        "- Drag the box to move it. It snaps to your desktop icon grid unless you turn that off (Behavior tab).\r\n" +
+        "- Drop files, folders, programs or shortcuts onto it to add them. Shortcuts are copied into the app's own folder, so deleting the original from your desktop is safe.\r\n" +
+        "- Open view: drag an icon onto another slot to re-order, or use A to Z / Z to A on the Icons tab.\r\n" +
+        "- Right-click: settings, arrange icons, remove an icon, new or delete cluster, exit.\r\n" +
+        "- Move the mouse over a cluster to see the settings icon (it opens this window). Hover any icon to see its name and location.\r\n\r\n" +
+        "THIS WINDOW\r\n" +
+        "- Changes show live. Apply changes keeps them; Cancel undoes everything since your last Apply. The status next to the buttons tells you which.\r\n" +
+        "- Expanded view / Settings icon (top) are previews only: they help you see what you are editing and switch off when this window closes.\r\n" +
+        "- A DESIGN is a saved look and layout. Save the current one under a name, then apply it to any cluster. Designs do not include icons or position.\r\n" +
+        "- Several clusters: each has its own icons, position and design. Use New / Delete at the top. A new cluster starts with the current design, in the middle of the screen.\r\n\r\n" +
+        "GOOD TO KNOW\r\n" +
+        "- Clusters stay visible when you press Win+D (show desktop).\r\n" +
+        "- The tray icon (in the hidden icons arrow) opens settings, creates clusters and exits.\r\n" +
+        "- Idle cost is zero: nothing runs while you are not using a cluster.\r\n" +
+        "- Only the wallpaper is blurred behind a cluster. It cannot blur windows.\r\n" +
+        "- If you move or delete a program, its icon turns into an empty square. Remove it or drop it again.\r\n\r\n" +
+        "YOUR FILES\r\n" +
+        "Everything is in %APPDATA%\\ClusterWidget: clusters (one .json per cluster), designs (saved designs) and shortcuts (copies of dropped shortcuts). You can edit the .json files by hand; changes are picked up while the app runs. Copy the folder to back up or move your setup.";
+
+    private const int PageX = 28, LabelW = 150, TrackX = 184, TrackW = 270, ValueX = 458, ValueW = 56, ClientW = 560;
 
     private static SettingsWindow? _open;
     private static bool _classRegistered;
 
     private Widget _w;
-    private nint _hwnd, _font, _tab, _clusterCombo, _designCombo, _presetCombo, _gearCombo,
-        _snapCheck, _labelsCheck, _expandFromCombo, _clickLaunchCheck, _autoGridCheck, _clusterPreviewCheck, _startupCheck, _gearAlwaysCheck, _imageName, _previewToggle, _gearToggle, _iconFont;
-    private readonly Dictionary<Widget, Config> _snaps = new();   // each edited cluster as it was when last applied (for Cancel)
+    private nint _hwnd, _font, _boldFont, _iconFont, _tab, _tip, _clusterCombo, _designCombo, _presetCombo, _gearCombo, _expandFromCombo,
+        _snapCheck, _labelsCheck, _autoGridCheck, _clusterPreviewCheck, _clickLaunchCheck, _startupCheck, _gearAlwaysCheck,
+        _imageName, _previewToggle, _gearToggle, _applyBtn, _cancelBtn, _status, _pageBrush;
     private float _s = 1f;
     private readonly List<nint>[] _pages = Enumerable.Range(0, PageNames.Length).Select(_ => new List<nint>()).ToArray();
     private readonly int[] _pageY = new int[PageNames.Length];
     private readonly nint[] _tracks = new nint[Defs.Length], _values = new nint[Defs.Length];
-    private int _currentPage;
-    private nint _pageBrush;
-    private readonly HashSet<nint> _labels = new();   // the plain text labels (see WM_CTLCOLORSTATIC)
+    private readonly HashSet<nint> _labels = new(), _hints = new(), _captions = new();
+    private readonly List<nint> _tipTexts = new();
+    private readonly Dictionary<Widget, Config> _snaps = new();   // each edited cluster as it was when last applied (for Cancel)
 
     private SettingsWindow(Widget w) { _w = w; }
 
@@ -108,6 +136,9 @@ internal sealed unsafe class SettingsWindow
         _open = new SettingsWindow(w);
         _open.Create();
     }
+
+    /// <summary>Lets the settings window handle keys like a dialog (Tab, Enter = Apply, Esc = Cancel). Called by the message loop.</summary>
+    public static bool HandleMessage(in MSG m) => _open != null && Native.IsDialogMessage(_open._hwnd, m) != 0;
 
     /// <summary>Clusters or their files changed: refresh the pickers and values.</summary>
     public static void Refresh() { if (_open != null) { _open.RefreshClusters(); _open.Sync(); } }
@@ -162,7 +193,7 @@ internal sealed unsafe class SettingsWindow
                     lpfnWndProc = (nint)(delegate* unmanaged[Stdcall]<nint, uint, nint, nint, nint>)&WndProcThunk,
                     hInstance = inst,
                     hCursor = Native.LoadCursor(0, 32512),
-                    hbrBackground = 6 /* COLOR_WINDOW + 1: same as the tab pages, so labels and checkboxes have no grey boxes */,
+                    hbrBackground = Native.CreateSolidBrush(0xFBFBFB) /* the tab page colour, so labels and checkboxes have no visible boxes */,
                     lpszClassName = cls,
                 };
                 Native.RegisterClassEx(ref wc);
@@ -175,33 +206,38 @@ internal sealed unsafe class SettingsWindow
         _hwnd = Native.CreateWindowEx(Native.WS_EX_TOOLWINDOW, "ClusterWidgetSettings", "Cluster settings", style, 200, 200, 600, 560, 0, 0, inst, 0);
         uint dpi = Native.GetDpiForWindow(_hwnd);
         _s = dpi == 0 ? 1f : dpi / 96f;
-        _font = Native.CreateFont(-(int)MathF.Round(9f * _s * 96f / 72f), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5 /* CLEARTYPE */, 0, "Segoe UI");
+        int px = -(int)MathF.Round(9f * _s * 96f / 72f);
+        _font = Native.CreateFont(px, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
+        _boldFont = Native.CreateFont(px, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
 
-        // ---- always-visible header: which cluster, which saved design
-        Header("Cluster", 14);
-        _clusterCombo = Ctl(-1, "COMBOBOX", "", 0x3 /* CBS_DROPDOWNLIST */ | 0x200000 | 0x10000, 84, 12, 222, 200, IdCluster);
-        Ctl(-1, "BUTTON", "Rename...", 0x10000, 312, 11, 84, 28, IdRename);
-        Ctl(-1, "BUTTON", "New", 0x10000, 402, 11, 60, 28, IdNewCluster);
-        Ctl(-1, "BUTTON", "Delete", 0x10000, 468, 11, 68, 28, IdDeleteCluster);
-        Header("Design", 52);
-        _designCombo = Ctl(-1, "COMBOBOX", "", 0x3 | 0x200000 | 0x10000, 84, 50, 222, 200, IdDesign);
-        Ctl(-1, "BUTTON", "Save as...", 0x10000, 312, 49, 84, 28, IdSaveDesign);
-        Ctl(-1, "BUTTON", "Delete", 0x10000, 402, 49, 68, 28, IdDeleteDesign);
+        _tip = Native.CreateWindowEx(0x8 /* WS_EX_TOPMOST */, "tooltips_class32", "", 0x80000000 | 0x3 /* POPUP | ALWAYSTIP | NOPREFIX */, 0, 0, 0, 0, _hwnd, 0, inst, 0);
+        Native.SendMessage(_tip, 0x0418 /* TTM_SETMAXTIPWIDTH */, 0, (nint)(340 * _s));
+        Native.SendMessage(_tip, 0x0403 /* TTM_SETDELAYTIME */, 3 /* TTDT_INITIAL */, 450);
 
-        // ---- view toggles (top bar): see the cluster expanded / see the settings icon while editing
-        _iconFont = Native.CreateFont(-(int)MathF.Round(13f * _s), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe Fluent Icons");
-        Header("View", 90);
-        _previewToggle = Ctl(-1, "BUTTON", "\uE740", 0x3 /* AUTOCHECKBOX */ | 0x1000 /* PUSHLIKE */ | 0x10000, 84, 88, 38, 30, IdPreview);
-        Native.SendMessage(_previewToggle, 0x30, _iconFont, 1);
-        Ctl(-1, "STATIC", "Expanded view", 0, 128, 94, 110, 20, 0);
-        _gearToggle = Ctl(-1, "BUTTON", "\uE713", 0x3 | 0x1000 | 0x10000, 250, 88, 38, 30, IdGearPreview);
-        Native.SendMessage(_gearToggle, 0x30, _iconFont, 1);
-        Ctl(-1, "STATIC", "Show settings icon", 0, 294, 94, 150, 20, 0);
+        // ---- header: what am I editing?
+        const int h1 = 12, h2 = 48, h3 = 86;
+        Header("Editing", h1);
+        _clusterCombo = Ctl(-1, "COMBOBOX", "", 0x3 /* CBS_DROPDOWNLIST */ | 0x200000 | 0x10000, 76, h1 - 1, 210, 200, IdCluster,
+            "Choose which cluster you are editing. Each cluster has its own icons, position and look.");
+        Ctl(-1, "BUTTON", "Rename", 0x10000, 294, h1 - 2, 76, 28, IdRename, "Change this cluster's name.");
+        Ctl(-1, "BUTTON", "New", 0x10000, 376, h1 - 2, 56, 28, IdNewCluster, "Create another cluster, in the middle of the screen, starting with this one's design.");
+        Ctl(-1, "BUTTON", "Delete", 0x10000, 438, h1 - 2, 70, 28, IdDeleteCluster, "Delete this cluster and its list of icons. Your files and programs are not touched.");
+        Header("Design", h2);
+        _designCombo = Ctl(-1, "COMBOBOX", "", 0x3 | 0x200000 | 0x10000, 76, h2 - 1, 210, 200, IdDesign,
+            "Pick a saved design to apply its look and layout to this cluster.");
+        Ctl(-1, "BUTTON", "Save as...", 0x10000, 294, h2 - 2, 84, 28, IdSaveDesign, "Save this cluster's look and layout under a name so you can reuse it on any cluster.");
+        Ctl(-1, "BUTTON", "Delete", 0x10000, 384, h2 - 2, 70, 28, IdDeleteDesign, "Delete the saved design shown in the box on the left.");
+        Header("Preview", h3);
+        _previewToggle = Ctl(-1, "BUTTON", "Expanded view", 0x3 /* AUTOCHECKBOX */ | 0x1000 /* PUSHLIKE */ | 0x10000, 76, h3 - 2, 120, 28, IdPreview,
+            "Keeps this cluster open while you edit, so you can see changes to the expanded view. Switches off when this window closes.");
+        _gearToggle = Ctl(-1, "BUTTON", "Settings icon", 0x3 | 0x1000 | 0x10000, 202, h3 - 2, 110, 28, IdGearPreview,
+            "Shows the settings icon on the cluster all the time while this window is open, so you can see where you are placing it.");
+        Hint(-1, "These two only affect this window.", 322, h3 + 4, 230);
 
         // ---- tabs
-        int tabTop = 132;
+        int tabTop = 124;
         _tab = Native.CreateWindowEx(0, "SysTabControl32", "", 0x40000000 | 0x10000000 | 0x04000000 /* CHILD | VISIBLE | CLIPSIBLINGS */ | 0x10000,
-            (int)(12 * _s), (int)(tabTop * _s), (int)(576 * _s), (int)(420 * _s), _hwnd, IdTab, inst, 0);
+            (int)(10 * _s), (int)(tabTop * _s), (int)((ClientW - 20) * _s), (int)(400 * _s), _hwnd, IdTab, inst, 0);
         Native.SendMessage(_tab, 0x30, _font, 1);
         for (int i = 0; i < PageNames.Length; i++)
         {
@@ -210,48 +246,86 @@ internal sealed unsafe class SettingsWindow
                 var item = new TCITEM { mask = 1 /* TCIF_TEXT */, pszText = t };
                 Native.SendMessage(_tab, 0x133E /* TCM_INSERTITEMW */, i, (nint)(&item));
             }
-            _pageY[i] = tabTop + 46;
+            _pageY[i] = tabTop + 42;
         }
 
-        BuildAppearance();
-        BuildImage();
+        BuildLook();
+        BuildPicture();
         BuildIcons();
-        BuildSpacing();
-        BuildGear();
-        BuildGeneral();
+        BuildSize();
+        BuildBehavior();
+        BuildAbout();
 
+        int tabH = Math.Max(_pageY.Max() - tabTop + 14, 360);
+        Native.SetWindowPos(_tab, 0, 0, 0, (int)((ClientW - 20) * _s), (int)(tabH * _s), Native.SWP_NOMOVE | Native.SWP_NOZORDER);
+
+        // ---- bottom bar: status on the left, Apply / Cancel on the right
+        int bar = tabTop + tabH + 12;
+        _status = Ctl(-1, "STATIC", "", 0, 16, bar + 8, 250, 20, 0);
+        _labels.Remove(_status); _hints.Add(_status);
+        _applyBtn = Ctl(-1, "BUTTON", "Apply changes", 0x1 /* DEFPUSHBUTTON */ | 0x10000, 292, bar, 140, 32, IdApply,
+            "Keep all the changes you made. Until you press this, they are only a preview and are not saved.");
+        _cancelBtn = Ctl(-1, "BUTTON", "Close", 0x10000, 440, bar, 108, 32, IdCancel,
+            "Undo everything since your last Apply and close this window. With nothing to undo it just closes.");
+
+        TakeSnap(_w);
         RefreshClusters();
         RefreshDesigns(null);
         Sync();
         ShowPage(0);
 
-        Ctl(-1, "BUTTON", "Apply changes", 0x1 | 0x10000, 300, tabTop + 420 + 10, 150, 32, IdApply);
-        Ctl(-1, "BUTTON", "Cancel", 0x10000, 458, tabTop + 420 + 10, 110, 32, IdCancel);
-        TakeSnap(_w);
-        int clientW = 600, clientH = tabTop + 420 + 10 + 32 + 14;
+        int clientH = bar + 32 + 14;
         Native.GetWindowRect(_hwnd, out RECT wr);
         Native.GetClientRect(_hwnd, out RECT cr);
-        int w = (int)(clientW * _s) + (wr.Right - wr.Left) - cr.Right, h = (int)(clientH * _s) + (wr.Bottom - wr.Top) - cr.Bottom;
-        Native.SetWindowPos(_hwnd, 0 /* HWND_TOP */, 220, 100, w, h, 0);
+        int w = (int)(ClientW * _s) + (wr.Right - wr.Left) - cr.Right, h = (int)(clientH * _s) + (wr.Bottom - wr.Top) - cr.Bottom;
+        var mi = default(MONITORINFO); mi.cbSize = (uint)sizeof(MONITORINFO);
+        Native.GetMonitorInfo(Native.MonitorFromPoint(default, 1), ref mi);
+        int x = Math.Max(mi.rcWork.Left, (mi.rcWork.Left + mi.rcWork.Right - w) / 2), y = Math.Max(mi.rcWork.Top, (mi.rcWork.Top + mi.rcWork.Bottom - h) / 2);
+        Native.SetWindowPos(_hwnd, 0 /* HWND_TOP */, x, y, w, h, 0);
         Native.ShowWindow(_hwnd, 5);
         Native.SetForegroundWindow(_hwnd);
     }
 
-    private nint Ctl(int page, string cls, string text, uint style, int x, int y, int w, int h, int id)
+    // ---- control helpers
+
+    private nint Ctl(int page, string cls, string text, uint style, int x, int y, int w, int h, int id, string? tip = null)
     {
         nint c = Native.CreateWindowEx(0, cls, text, 0x40000000 | 0x10000000 | style, (int)(x * _s), (int)(y * _s), (int)(w * _s), (int)(h * _s),
             _hwnd, id, Native.GetModuleHandle(0), 0);
         Native.SendMessage(c, 0x30 /* WM_SETFONT */, _font, 1);
         if (page >= 0) _pages[page].Add(c);
         if (cls == "STATIC") _labels.Add(c);
+        if (tip != null) Tip(c, tip);
         return c;
     }
 
-    private void Header(string text, int y) => Ctl(-1, "STATIC", text, 0, 16, y + 4, 64, 20, 0);
+    private void Tip(nint control, string text)
+    {
+        nint buf = Marshal.StringToHGlobalUni(text);
+        _tipTexts.Add(buf);
+        var ti = new TOOLINFO { cbSize = (uint)sizeof(TOOLINFO), uFlags = 0x1 | 0x10 /* TTF_IDISHWND | TTF_SUBCLASS */, hwnd = _hwnd, uId = (nuint)control, lpszText = (char*)buf };
+        Native.SendMessage(_tip, 0x0432 /* TTM_ADDTOOLW */, 0, (nint)(&ti));
+    }
 
-    private int NextY(int page, int height = RowH) { int y = _pageY[page]; _pageY[page] += height; return y; }
+    private void Header(string text, int y) { var c = Ctl(-1, "STATIC", text, 0, 16, y + 5, 58, 20, 0); _captions.Add(c); }
 
-    /// <summary>One row for every slider / swatch of a page, in order.</summary>
+    /// <summary>Small grey explanatory line.</summary>
+    private void Hint(int page, string text, int x, int y, int w)
+    {
+        var c = Ctl(page, "STATIC", text, 0, x, y, w, 20, 0);
+        _hints.Add(c);
+    }
+
+    private int NextY(int page, int height = 36) { int y = _pageY[page]; _pageY[page] += height; return y; }
+
+    private void Section(int page, string text)
+    {
+        int y = NextY(page, 28);
+        var c = Ctl(page, "STATIC", text, 0, PageX - 8, y + 4, 400, 20, 0);
+        Native.SendMessage(c, 0x30, _boldFont, 1);
+        _captions.Add(c);
+    }
+
     private void AddDefs(int page)
     {
         for (int i = 0; i < Defs.Length; i++)
@@ -259,98 +333,109 @@ internal sealed unsafe class SettingsWindow
             if (Defs[i].Page != page) continue;
             var d = Defs[i];
             int y = NextY(page);
-            Ctl(page, "STATIC", d.Label, 0, PageX, y + 4, 156, 20, 0);
+            Ctl(page, "STATIC", d.Label, 0, PageX, y + 4, LabelW, 20, 0, d.Tip);
             if (d.Kind != Kind.Slider)
             {
-                Ctl(page, "BUTTON", "", 0xB /* BS_OWNERDRAW */ | 0x10000, TrackX - 4, y, 80, 28, IdBase + i);
+                Ctl(page, "BUTTON", "", 0xB /* BS_OWNERDRAW */ | 0x10000, TrackX - 4, y, 80, 28, IdBase + i, d.Tip);
                 continue;
             }
-            _tracks[i] = Ctl(page, "msctls_trackbar32", "", 0x10 /* TBS_NOTICKS */ | 0x10000, TrackX, y, TrackW, 28, IdBase + i);
+            _tracks[i] = Ctl(page, "msctls_trackbar32", "", 0x10 /* TBS_NOTICKS */ | 0x10000, TrackX, y, TrackW, 28, IdBase + i, d.Tip);
             Native.SendMessage(_tracks[i], 0x407 /* TBM_SETRANGEMIN */, 0, d.Min);
             Native.SendMessage(_tracks[i], 0x408 /* TBM_SETRANGEMAX */, 0, d.Max);
-            _values[i] = Ctl(page, "STATIC", "", 0x2 /* SS_RIGHT */, ValueX, y + 4, 64, 20, 0);
+            _values[i] = Ctl(page, "STATIC", "", 0x2 /* SS_RIGHT */, ValueX, y + 4, ValueW, 20, 0);
             _labels.Remove(_values[i]);   // values change, so they repaint their background (transparent text would pile up)
         }
     }
 
-    private void Row(int page, string label, Func<int, nint> make)
+    private nint Check(int page, string text, int id, string tip, int height = 30)
     {
-        int y = NextY(page);
-        Ctl(page, "STATIC", label, 0, PageX, y + 4, 156, 20, 0);
-        make(y);
+        int y = NextY(page, height);
+        return Ctl(page, "BUTTON", text, 0x3 /* BS_AUTOCHECKBOX */ | 0x10000, PageX, y, 500, 24, id, tip);
     }
 
-    private void BuildAppearance() => AddDefs(PAppearance);
-
-    private void BuildImage()
+    private nint ComboRow(int page, string label, int id, string tip, int w = 280)
     {
-        int y = NextY(PImage);
-        Ctl(PImage, "STATIC", "Picture", 0, PageX, y + 6, 156, 20, 0);
-        Ctl(PImage, "BUTTON", "Choose...", 0x10000, TrackX - 4, y, 110, 28, IdImgChoose);
-        Ctl(PImage, "BUTTON", "Remove", 0x10000, TrackX + 112, y, 90, 28, IdImgClear);
-        y = NextY(PImage, 30);
-        _imageName = Ctl(PImage, "STATIC", "", 0x4000 /* SS_ENDELLIPSIS */, TrackX, y, 340, 20, 0);
-        _labels.Remove(_imageName);
-        AddDefs(PImage);
+        int y = NextY(page);
+        Ctl(page, "STATIC", label, 0, PageX, y + 4, LabelW, 20, 0, tip);
+        return Ctl(page, "COMBOBOX", "", 0x3 | 0x200000 | 0x10000, TrackX - 4, y, w, 200, id, tip);
+    }
+
+    // ---- pages
+
+    private void BuildLook() => AddDefs(PLook);
+
+    private void BuildPicture()
+    {
+        int y = NextY(PPicture);
+        Ctl(PPicture, "STATIC", "Picture", 0, PageX, y + 6, LabelW, 20, 0, "Show a picture inside the box, on top of the tint colour.");
+        Ctl(PPicture, "BUTTON", "Choose...", 0x10000, TrackX - 4, y, 110, 28, IdImgChoose, "Pick a picture to show inside the box (png, jpg, bmp, gif or tif).");
+        Ctl(PPicture, "BUTTON", "Remove", 0x10000, TrackX + 112, y, 90, 28, IdImgClear, "Remove the picture and go back to the blurred wallpaper.");
+        y = NextY(PPicture, 28);
+        _imageName = Ctl(PPicture, "STATIC", "", 0x4000 /* SS_ENDELLIPSIS */, TrackX, y, 340, 20, 0);
+        _labels.Remove(_imageName); _hints.Add(_imageName);
+        AddDefs(PPicture);
     }
 
     private void BuildIcons()
     {
-        int y = NextY(PIcons, 34);
-        _autoGridCheck = Ctl(PIcons, "BUTTON", "Automatic grid (size follows the icon count)", 0x3 /* BS_AUTOCHECKBOX */ | 0x10000, PageX, y, 440, 24, IdAutoGrid);
+        _autoGridCheck = Check(PIcons, "Automatic grid (the box shape follows the icon count)", IdAutoGrid,
+            "On: the closed box is as square as the icon count allows, and you set how many icons it shows. Off: you choose icons per row and per column.");
         AddDefs(PIcons);
-        y = NextY(PIcons, 34);
-        _clusterPreviewCheck = Ctl(PIcons, "BUTTON", "Last closed icon is a mini preview of the rest", 0x3 | 0x10000, PageX, y, 440, 24, IdClusterPreview);
-        y = NextY(PIcons, 34);
-        _labelsCheck = Ctl(PIcons, "BUTTON", "Show names when expanded", 0x3 | 0x10000, PageX, y, 340, 24, IdLabels);
-        y = NextY(PIcons, 34);
-        _clickLaunchCheck = Ctl(PIcons, "BUTTON", "Clicking an icon opens the app (only the preview opens the cluster)", 0x3 | 0x10000, PageX, y, 520, 24, IdClickLaunches);
-        y = NextY(PIcons, 44);
-        Ctl(PIcons, "STATIC", "Order (or drag icons)", 0, PageX, y + 6, 230, 20, 0);
-        Ctl(PIcons, "BUTTON", "A to Z", 0x10000, PageX + 240, y, 76, 28, IdSortAz);
-        Ctl(PIcons, "BUTTON", "Z to A", 0x10000, PageX + 322, y, 76, 28, IdSortZa);
-        Ctl(PIcons, "BUTTON", "Reverse", 0x10000, PageX + 404, y, 76, 28, IdReverse);
+        _clusterPreviewCheck = Check(PIcons, "When there are more icons, the last slot is a mini preview of the rest", IdClusterPreview,
+            "On: the last closed slot shows a small 2x2 preview of the icons that did not fit. Off: it is just another icon.");
+        _clickLaunchCheck = Check(PIcons, "Clicking an icon opens that app (only the preview opens the cluster)", IdClickLaunches,
+            "Only matters when there are more icons than fit closed. On: a click on an icon launches it, and only the mini preview or the box edge opens the cluster. Off: any click opens the cluster.");
+        int y = NextY(PIcons, 40);
+        Ctl(PIcons, "STATIC", "Order", 0, PageX, y + 6, 60, 20, 0, "Sort the icons by name. You can also drag an icon onto another slot in the expanded view.");
+        Ctl(PIcons, "BUTTON", "A to Z", 0x10000, TrackX - 4, y, 76, 28, IdSortAz, "Sort the icons by name, A to Z.");
+        Ctl(PIcons, "BUTTON", "Z to A", 0x10000, TrackX + 78, y, 76, 28, IdSortZa, "Sort the icons by name, Z to A.");
+        Ctl(PIcons, "BUTTON", "Reverse", 0x10000, TrackX + 160, y, 76, 28, IdReverse, "Reverse the current order.");
+        y = NextY(PIcons, 22);
+        Hint(PIcons, "Tip: in the expanded view you can also drag an icon onto another slot.", PageX, y, 480);
     }
 
-    private void BuildSpacing()
+    private void BuildSize()
     {
-        AddDefs(PSpacing);
-        Row(PSpacing, "Closed preset", y =>
-        {
-            _presetCombo = Ctl(PSpacing, "COMBOBOX", "", 0x3 | 0x200000 | 0x10000, TrackX - 4, y, 220, 160, IdPreset);
-            foreach (var p in Presets) AddString(_presetCombo, p.Name);
-            return _presetCombo;
-        });
+        AddDefs(PSize);
+        _labelsCheck = Check(PSize, "Show names under the icons in the expanded view", IdLabels, "Show each icon's name under it when the cluster is expanded.");
+        int y = NextY(PSize);
+        Ctl(PSize, "STATIC", "Closed spacing preset", 0, PageX, y + 4, LabelW + 20, 20, 0, "Quick padding and spacing for the closed box. Padding is never smaller than spacing.");
+        _presetCombo = Ctl(PSize, "COMBOBOX", "", 0x3 | 0x200000 | 0x10000, TrackX + 14, y, 180, 160, IdPreset, "Quick padding and spacing for the closed box. Padding is never smaller than spacing.");
+        foreach (var p in Presets) AddString(_presetCombo, p.Name);
     }
 
-    private void BuildGear()
+    private void BuildBehavior()
     {
-        Row(PGear, "Position", y =>
-        {
-            _gearCombo = Ctl(PGear, "COMBOBOX", "", 0x3 | 0x200000 | 0x10000, TrackX - 4, y, 220, 200, IdGear);
-            foreach (var c in Corners) AddString(_gearCombo, c.Name);
-            return _gearCombo;
-        });
-        AddDefs(PGear);
-        int y = NextY(PGear);
-        _gearAlwaysCheck = Ctl(PGear, "BUTTON", "Always show the settings icon", 0x3 | 0x10000, PageX, y, 340, 24, IdGearAlways);
+        Section(PBehavior, "Moving and opening");
+        _snapCheck = Check(PBehavior, "Snap to the desktop grid when moving", IdSnap,
+            "On: the box snaps to your desktop icon grid when you move it. Off: place it anywhere.");
+        _expandFromCombo = ComboRow(PBehavior, "Expand from", IdExpandFrom,
+            "Center: grows evenly in every direction. Top-left corner: the corner stays where it is and the box grows right and down.");
+        AddString(_expandFromCombo, "Center (grows evenly all round)");
+        AddString(_expandFromCombo, "Top-left corner (grows right and down)");
+        Section(PBehavior, "Settings icon");
+        _gearCombo = ComboRow(PBehavior, "Position", IdGear,
+            "Which corner the settings icon sits in. Automatic picks a corner where it overlaps nothing.", 280);
+        foreach (var c in Corners) AddString(_gearCombo, c.Name);
+        AddDefs(PBehavior);
+        _gearAlwaysCheck = Check(PBehavior, "Always show the settings icon (not only on hover)", IdGearAlways,
+            "Keep the settings icon visible instead of showing it only while you hover the cluster.");
+        Section(PBehavior, "System");
+        _startupCheck = Check(PBehavior, "Start with Windows (all clusters)", IdStartup, "Start ClusterWidget when you sign in to Windows.");
+        int y = NextY(PBehavior, 40);
+        Ctl(PBehavior, "BUTTON", "Reset this cluster's look and layout", 0x10000, PageX, y + 2, 250, 30, IdReset,
+            "Put this cluster's look and layout back to the defaults. Its icons, position and name stay.");
     }
 
-    private void BuildGeneral()
+    private void BuildAbout()
     {
-        Row(PGeneral, "Expand from", y =>
-        {
-            _expandFromCombo = Ctl(PGeneral, "COMBOBOX", "", 0x3 | 0x200000 | 0x10000, TrackX - 4, y, 240, 120, IdExpandFrom);
-            AddString(_expandFromCombo, "Center (grows evenly all round)");
-            AddString(_expandFromCombo, "Top-left corner (grows right and down)");
-            return _expandFromCombo;
-        });
-        int y = NextY(PGeneral, 34);
-        _snapCheck = Ctl(PGeneral, "BUTTON", "Snap to the desktop grid", 0x3 | 0x10000, PageX, y, 360, 24, IdSnap);
-        y = NextY(PGeneral, 34);
-        _startupCheck = Ctl(PGeneral, "BUTTON", "Start with Windows (all clusters)", 0x3 | 0x10000, PageX, y, 360, 24, IdStartup);
-        y = NextY(PGeneral, 50);
-        Ctl(PGeneral, "BUTTON", "Reset this cluster's look and layout", 0x10000, PageX, y + 6, 250, 30, IdReset);
+        var box = Ctl(PAbout, "EDIT", AboutText, 0x4 /* MULTILINE */ | 0x800 /* READONLY */ | 0x200000 /* VSCROLL */ | 0x40 /* AUTOVSCROLL */ | 0x800000 /* BORDER */ | 0x10000,
+            PageX - 12, _pageY[PAbout], ClientW - 20 - 2 * (PageX - 12) + 10, 296, 0);
+        _pageY[PAbout] += 304;
+        _labels.Remove(box);
+        Ctl(PAbout, "BUTTON", "Open the settings folder", 0x10000, PageX - 12, _pageY[PAbout], 200, 28, IdOpenFolder, "Open %APPDATA%\\ClusterWidget in Explorer: clusters, designs and shortcut copies.");
+        Ctl(PAbout, "BUTTON", "Open this cluster's file", 0x10000, PageX + 196, _pageY[PAbout], 200, 28, IdOpenFile, "Open the .json file of the cluster you are editing, to edit it by hand.");
+        _pageY[PAbout] += 34;
     }
 
     private void AddString(nint combo, string s)
@@ -360,7 +445,6 @@ internal sealed unsafe class SettingsWindow
 
     private void ShowPage(int page)
     {
-        _currentPage = page;
         Native.SendMessage(_tab, 0x130C /* TCM_SETCURSEL */, page, 0);
         for (int p = 0; p < _pages.Length; p++)
             foreach (var c in _pages[p]) Native.ShowWindow(c, p == page ? 5 : 0);
@@ -390,7 +474,7 @@ internal sealed unsafe class SettingsWindow
         UpdateEnabled(autoGrid);
         Native.SendMessage(_gearAlwaysCheck, 0xF1, cfg.GearAlways ? 1 : 0, 0);
         Native.SendMessage(_startupCheck, 0xF1, Native.StartsWithWindows() ? 1 : 0, 0);
-        Native.SetWindowText(_imageName, cfg.BackgroundImage.Length == 0 ? "(none)" : System.IO.Path.GetFileName(cfg.BackgroundImage));
+        Native.SetWindowText(_imageName, cfg.BackgroundImage.Length == 0 ? "(no picture)" : System.IO.Path.GetFileName(cfg.BackgroundImage));
 
         int preset = -1;
         for (int i = 0; i < Presets.Length; i++)
@@ -403,6 +487,7 @@ internal sealed unsafe class SettingsWindow
         Native.SendMessage(_gearCombo, 0x14E, corner, 0);
         for (int i = 0; i < Defs.Length; i++)
             if (Defs[i].Kind != Kind.Slider) Native.InvalidateRect(Native.GetDlgItem(_hwnd, IdBase + i), 0, 1);
+        UpdateDirty();
     }
 
     /// <summary>Icons when closed only applies to an automatic grid; icons per row / column only to a fixed one.</summary>
@@ -418,6 +503,26 @@ internal sealed unsafe class SettingsWindow
         }
     }
 
+    // ---- unsaved-changes tracking: Apply is only available when there is something to apply
+
+    private static string Signature(Config c)
+    {
+        var d = new Config();
+        d.ApplyDesign(c);
+        d.Snap = c.Snap;
+        return JsonSerializer.Serialize(d, ConfigJson.Default.Config);
+    }
+
+    private bool IsDirty() => _snaps.Any(kv => App.Widgets.Contains(kv.Key) && Signature(kv.Key.Cfg) != Signature(kv.Value));
+
+    private void UpdateDirty()
+    {
+        bool dirty = IsDirty();
+        Native.EnableWindow(_applyBtn, dirty ? 1 : 0);
+        Native.SetWindowText(_cancelBtn, dirty ? "Cancel" : "Close");
+        Native.SetWindowText(_status, dirty ? "Unsaved changes (live preview)" : "All changes saved");
+    }
+
     private void RefreshClusters()
     {
         Native.SendMessage(_clusterCombo, 0x14B /* CB_RESETCONTENT */, 0, 0);
@@ -428,7 +533,7 @@ internal sealed unsafe class SettingsWindow
     private void RefreshDesigns(string? select)
     {
         Native.SendMessage(_designCombo, 0x14B, 0, 0);
-        AddString(_designCombo, "(saved designs)");
+        AddString(_designCombo, "Choose a saved design...");
         string[] names = Designs.List();
         foreach (var n in names) AddString(_designCombo, n);
         int idx = select == null ? 0 : Array.FindIndex(names, n => n.Equals(select, StringComparison.OrdinalIgnoreCase)) + 1;
@@ -458,6 +563,7 @@ internal sealed unsafe class SettingsWindow
             if (!App.Widgets.Contains(w)) { _snaps.Remove(w); continue; }
             w.SaveNow(); _snaps[w] = w.Cfg.Clone();
         }
+        UpdateDirty();
     }
 
     private void Cancel()
@@ -563,7 +669,11 @@ internal sealed unsafe class SettingsWindow
     private void DeleteDesign()
     {
         string? name = SelectedDesign();
-        if (name == null) return;
+        if (name == null)
+        {
+            Native.MessageBox(_hwnd, "Pick a saved design in the box first, then press Delete.", "Delete design", 0x40);
+            return;
+        }
         if (Native.MessageBox(_hwnd, $"Delete the saved design \"{name}\"?", "Delete design", 0x4 | 0x30 | 0x100) != 6) return;
         Designs.Delete(name);
         RefreshDesigns(null);
@@ -575,13 +685,23 @@ internal sealed unsafe class SettingsWindow
     {
         switch (msg)
         {
-            case 0x138: // WM_CTLCOLORSTATIC: draw labels without their own grey box, so they sit cleanly on the tab pages
-                if (_labels.Contains(lp))
+            case 0x138: // WM_CTLCOLORSTATIC: labels sit on the tab page without their own grey box; hints and captions get their own colour
+                if (lp == _status || lp == _imageName)
+                {
+                    // text that changes must repaint its background, or old and new text pile up
+                    if (_pageBrush == 0) _pageBrush = Native.CreateSolidBrush(0xFBFBFB);
+                    Native.SetBkColor(wp, 0xFBFBFB);
+                    Native.SetTextColor(wp, 0x707070);
+                    return _pageBrush;
+                }
+                if (_labels.Contains(lp) || _hints.Contains(lp) || _captions.Contains(lp))
                 {
                     Native.SetBkMode(wp, 1 /* TRANSPARENT */);
+                    if (_hints.Contains(lp)) Native.SetTextColor(wp, 0x707070);
+                    else if (_captions.Contains(lp)) Native.SetTextColor(wp, 0x202020);
                     return Native.GetStockObject(5 /* NULL_BRUSH */);
                 }
-                // trackbars ask too: paint them the colour of the tab page instead of dialog grey
+                // trackbars and value labels ask too: paint them the colour of the tab page instead of dialog grey
                 if (_pageBrush == 0) _pageBrush = Native.CreateSolidBrush(0xFBFBFB);
                 return _pageBrush;
 
@@ -603,11 +723,12 @@ internal sealed unsafe class SettingsWindow
                     _w.LookChanged(Defs[i].Blur);
                     break;
                 }
-                Sync(); // padding/spacing sliders may no longer match a preset
+                Sync(); // padding/spacing sliders may no longer match a preset; also refreshes the unsaved-changes state
                 return 0;
 
             case 0x111: // WM_COMMAND
                 OnCommand((int)(wp & 0xFFFF), (int)((wp >> 16) & 0xFFFF));
+                if (_open != null) UpdateDirty();
                 return 0;
 
             case 0x2B: // WM_DRAWITEM: the color swatch buttons
@@ -629,8 +750,10 @@ internal sealed unsafe class SettingsWindow
 
             case Native.WM_DESTROY:
             {
+                foreach (var b in _tipTexts) Marshal.FreeHGlobal(b);
+                _tipTexts.Clear();
                 if (_font != 0) { Native.DeleteObject(_font); _font = 0; }
-                if (_iconFont != 0) { Native.DeleteObject(_iconFont); _iconFont = 0; }
+                if (_boldFont != 0) { Native.DeleteObject(_boldFont); _boldFont = 0; }
                 if (_pageBrush != 0) { Native.DeleteObject(_pageBrush); _pageBrush = 0; }
                 _open = null;
                 foreach (var cw in App.Widgets.ToArray()) { cw.SetPreviewOpen(false); cw.SetGearPreview(false); } // previews end with the window
@@ -646,6 +769,9 @@ internal sealed unsafe class SettingsWindow
         if (id >= IdBase && id < IdBase + Defs.Length && Defs[id - IdBase].Kind != Kind.Slider) { PickColor(Defs[id - IdBase].Kind, id); return; }
         switch (id)
         {
+            case IdApply: if (IsDirty()) Apply(); break;
+            case IdCancel: Cancel(); break;
+
             case IdCluster when code == 1 /* CBN_SELCHANGE */:
             {
                 int sel = (int)Native.SendMessage(_clusterCombo, 0x147, 0, 0);
@@ -672,6 +798,8 @@ internal sealed unsafe class SettingsWindow
             }
             case IdSaveDesign: SaveDesign(); break;
             case IdDeleteDesign: DeleteDesign(); break;
+            case IdPreview: _w.SetPreviewOpen(Native.SendMessage(_previewToggle, 0xF0, 0, 0) == 1); break;
+            case IdGearPreview: _w.SetGearPreview(Native.SendMessage(_gearToggle, 0xF0, 0, 0) == 1); break;
 
             case IdPreset when code == 1:
             {
@@ -694,21 +822,17 @@ internal sealed unsafe class SettingsWindow
                 cfg.ExpandFrom = Native.SendMessage(_expandFromCombo, 0x147, 0, 0) == 1 ? "topLeft" : "center";
                 _w.LookChanged(false);
                 break;
+            case IdImgChoose: ChooseImage(); break;
+            case IdImgClear: cfg.BackgroundImage = ""; Sync(); _w.LookChanged(false); break;
             case IdSortAz: _w.SortItems(0); break;
             case IdSortZa: _w.SortItems(1); break;
             case IdReverse: _w.SortItems(2); break;
-            case IdImgChoose: ChooseImage(); break;
-            case IdImgClear: cfg.BackgroundImage = ""; Sync(); _w.LookChanged(false); break;
 
             case IdSnap: cfg.Snap = Native.SendMessage(_snapCheck, 0xF0 /* BM_GETCHECK */, 0, 0) == 1; _w.SnapToggled(); break;
             case IdLabels: cfg.ShowLabels = Native.SendMessage(_labelsCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); break;
             case IdGearAlways: cfg.GearAlways = Native.SendMessage(_gearAlwaysCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); break;
-            case IdPreview: _w.SetPreviewOpen(Native.SendMessage(_previewToggle, 0xF0, 0, 0) == 1); break;
-            case IdGearPreview: _w.SetGearPreview(Native.SendMessage(_gearToggle, 0xF0, 0, 0) == 1); break;
-            case IdApply: Apply(); break;
-            case IdCancel: Cancel(); break;
-            case IdClickLaunches: cfg.ClickLaunches = Native.SendMessage(_clickLaunchCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); break;
             case IdClusterPreview: cfg.ClusterPreview = Native.SendMessage(_clusterPreviewCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); break;
+            case IdClickLaunches: cfg.ClickLaunches = Native.SendMessage(_clickLaunchCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); break;
             case IdAutoGrid:
                 if (Native.SendMessage(_autoGridCheck, 0xF0, 0, 0) == 1) { cfg.BoxCols = 0; cfg.BoxRows = 0; }
                 else { var (c, r) = _w.GridDims; cfg.BoxCols = Math.Max(1, c); cfg.BoxRows = Math.Max(1, r); }
@@ -724,6 +848,8 @@ internal sealed unsafe class SettingsWindow
                     cfg.ResetLook(); Sync(); _w.LookChanged(true);
                 }
                 break;
+            case IdOpenFolder: Native.ShellExecute(_hwnd, "open", Config.RootDir, null, null, 1); break;
+            case IdOpenFile: Native.ShellExecute(_hwnd, "open", cfg.SourcePath, null, null, 1); break;
         }
     }
 }

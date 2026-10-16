@@ -37,7 +37,7 @@ internal static class DesktopGrid
 /// </summary>
 internal sealed unsafe class Widget
 {
-    private const nuint TimerAnim = 1, TimerBackdrop = 3, TimerSave = 4, TimerPreload = 5;
+    private const nuint TimerAnim = 1, TimerBackdrop = 3, TimerSave = 4, TimerPreload = 5, TimerTip = 6;
 
     private sealed class Slot
     {
@@ -88,6 +88,9 @@ internal sealed unsafe class Widget
     private int _bgW, _bgH, _bgOx, _bgOy, _vx, _vy, _vw, _vh;   // _v*: the part of the cache that is valid
     private bool _bgDirty = true;
     private int _preloadNext;
+    private nint _tip, _tipBuf;               // hover help: a tracking tooltip that follows the pointer
+    private int _tipKey = -2;
+    private string? _tipText;
     private long _lastPreloadFrame;
     private int _canvasW, _canvasH;
     private nint _fontFamily, _font, _strFmt, _brushHover, _gearFamily, _gearFont;
@@ -118,6 +121,9 @@ internal sealed unsafe class Widget
     public void Destroy()
     {
         _dead = true;
+        HideTip();
+        if (_tip != 0) { Native.DestroyWindow(_tip); _tip = 0; }
+        if (_tipBuf != 0) { Marshal.FreeHGlobal(_tipBuf); _tipBuf = 0; }
         Map.Remove(_hwnd);
         if (_hwnd != 0) Native.DestroyWindow(_hwnd);
         _hwnd = 0;
@@ -457,6 +463,68 @@ internal sealed unsafe class Widget
     private static float LerpF(float a, float b, float t) => a + (b - a) * t;
     private float Radius => _cfg.CornerRadius * _u;
 
+    // ---------------------------------------------------------------- hover help
+
+    private TOOLINFO TipInfo() => new() { cbSize = (uint)sizeof(TOOLINFO), uFlags = 0x20 | 0x80 /* TTF_TRACK | TTF_ABSOLUTE */, hwnd = _hwnd, uId = 1, lpszText = (char*)_tipBuf };
+
+    private void EnsureTip()
+    {
+        if (_tip != 0) return;
+        nint inst = Native.GetModuleHandle(0);
+        _tip = Native.CreateWindowEx(0x8 /* WS_EX_TOPMOST */, "tooltips_class32", "", 0x80000000 | 0x3 /* POPUP | ALWAYSTIP | NOPREFIX */, 0, 0, 0, 0, _hwnd, 0, inst, 0);
+        _tipBuf = Marshal.AllocHGlobal(2048);
+        *(char*)_tipBuf = '\0';
+        Native.SendMessage(_tip, 0x0418 /* TTM_SETMAXTIPWIDTH */, 0, (nint)(420 * _scale));
+        var ti = TipInfo();
+        Native.SendMessage(_tip, 0x0432 /* TTM_ADDTOOLW */, 0, (nint)(&ti));
+    }
+
+    /// <summary>Remembers what the pointer is over; the help text appears if it stays there for a moment.</summary>
+    private void ArmTip(int key, string? text)
+    {
+        if (key == _tipKey) return;
+        HideTip();
+        _tipKey = key; _tipText = text;
+        if (text != null) Native.SetTimer(_hwnd, TimerTip, 550, 0);
+    }
+
+    private void ShowTip()
+    {
+        Native.KillTimer(_hwnd, TimerTip);
+        if (_tipText == null || _dragging || _itemDrag >= 0) return;
+        EnsureTip();
+        string s = _tipText.Length > 900 ? _tipText[..900] : _tipText;
+        char* buf = (char*)_tipBuf;
+        for (int i = 0; i < s.Length; i++) buf[i] = s[i];
+        buf[s.Length] = '\0';
+        var ti = TipInfo();
+        Native.SendMessage(_tip, 0x0439 /* TTM_UPDATETIPTEXTW */, 0, (nint)(&ti));
+        Native.GetCursorPos(out POINT pt);
+        Native.SendMessage(_tip, 0x0412 /* TTM_TRACKPOSITION */, 0, (nint)(((pt.Y + (int)(24 * _scale)) << 16) | ((pt.X + (int)(14 * _scale)) & 0xFFFF)));
+        Native.SendMessage(_tip, 0x0411 /* TTM_TRACKACTIVATE */, 1, (nint)(&ti));
+    }
+
+    private void HideTip()
+    {
+        Native.KillTimer(_hwnd, TimerTip);
+        _tipKey = -2; _tipText = null;
+        if (_tip == 0) return;
+        var ti = TipInfo();
+        Native.SendMessage(_tip, 0x0411 /* TTM_TRACKACTIVATE */, 0, (nint)(&ti));
+    }
+
+    /// <summary>What the help bubble says for an icon: its name and place, and what a click does.</summary>
+    private string? TipFor(int i)
+    {
+        if (i < 0 || i >= _slots.Count) return null;
+        var it = _slots[i].Item;
+        if (_t < 0.5f && Clustered && _cfg.ClusterPreview && i == _ke - 1)
+            return $"{_slots.Count - i} more icons\nClick to open the cluster";
+        string tail = _t >= 0.5f
+            ? "\nClick to open it. Drag onto another slot to move it."
+            : (Clustered && !_cfg.ClickLaunches ? "\nClick to open the cluster" : "\nClick to open it");
+        return it.DisplayName + "\n" + it.Path + tail;
+    }
     // ---------------------------------------------------------------- tiles
 
     private int ShownCount => Math.Min(_slots.Count, _ecols * _erows);
@@ -1166,6 +1234,7 @@ internal sealed unsafe class Widget
 
             case Native.WM_LBUTTONDOWN:
             {
+                HideTip();
                 _pressed = true; _dragging = false;
                 Native.GetCursorPos(out _downPt);
                 int cx = CanvasX(lp), cy = CanvasY(lp);
@@ -1217,6 +1286,7 @@ internal sealed unsafe class Widget
                 if (hit >= _slots.Count) hit = -1;
                 bool gear = HitGear(CanvasX(lp), CanvasY(lp));
                 if (gear) hit = -1;
+                ArmTip(gear ? 1000 : hit, gear ? "Cluster settings" : TipFor(hit));
                 if (entered || hit != _hover || gear != _hoverGear)
                 {
                     long t0 = Perf.Start();
@@ -1227,6 +1297,7 @@ internal sealed unsafe class Widget
             }
 
             case Native.WM_MOUSELEAVE:
+                HideTip();
                 FlushPerf();
                 _tracking = false; _inside = false; _hoverGear = false;
                 _hover = -1;
@@ -1268,6 +1339,7 @@ internal sealed unsafe class Widget
             case Native.WM_TIMER:
                 if ((nuint)wp == TimerAnim) AnimTick();
                 else if ((nuint)wp == TimerPreload) PreloadTick();
+                else if ((nuint)wp == TimerTip) ShowTip();
                 else if ((nuint)wp == TimerBackdrop) { Native.KillTimer(h, TimerBackdrop); RebuildBackdrop(); Frame(); Trim(); }
                 else if ((nuint)wp == TimerSave) { Native.KillTimer(h, TimerSave); SaveNow(); }
                 return 0;

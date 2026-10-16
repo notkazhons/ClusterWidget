@@ -35,7 +35,11 @@ internal static unsafe class App
         StartWatcher();
         Native.EmptyWorkingSet(Native.GetCurrentProcess());
 
-        while (Native.GetMessage(out MSG m, 0, 0, 0) > 0) { Native.TranslateMessage(m); Native.DispatchMessage(m); }
+        while (Native.GetMessage(out MSG m, 0, 0, 0) > 0)
+        {
+            if (SettingsWindow.HandleMessage(m)) continue; // Tab / Enter / Esc inside the settings window
+            Native.TranslateMessage(m); Native.DispatchMessage(m);
+        }
 
         RemoveTrayIcon();
         _watcher?.Dispose();
