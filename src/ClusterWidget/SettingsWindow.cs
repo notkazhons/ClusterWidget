@@ -77,7 +77,8 @@ internal sealed unsafe class SettingsWindow
         ("Bottom right", "bottomRight"), ("Bottom left", "bottomLeft"),
     };
 
-    private const string AboutText =
+    private static readonly string AboutText =
+        "ClusterWidget " + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "") + "\r\n\r\n" +
         "ClusterWidget puts small boxes of shortcuts on your desktop. Each box is a CLUSTER. Closed, it shows a few icons; open it to see them all.\r\n\r\n" +
         "USING A CLUSTER\r\n" +
         "- Click it to open it. Press Esc or click anywhere else to close it.\r\n" +
@@ -106,7 +107,7 @@ internal sealed unsafe class SettingsWindow
     private static bool _classRegistered;
 
     private Widget _w;
-    private nint _hwnd, _font, _boldFont, _iconFont, _tab, _tip, _clusterCombo, _designCombo, _presetCombo, _gearCombo, _expandFromCombo,
+    private nint _hwnd, _font, _boldFont, _tab, _tip, _clusterCombo, _designCombo, _presetCombo, _gearCombo, _expandFromCombo,
         _snapCheck, _labelsCheck, _autoGridCheck, _clusterPreviewCheck, _clickLaunchCheck, _startupCheck, _gearAlwaysCheck,
         _imageName, _lookNote, _previewToggle, _gearToggle, _applyBtn, _cancelBtn, _status, _pageBrush;
     private float _s = 1f;

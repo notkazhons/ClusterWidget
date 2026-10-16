@@ -1,84 +1,128 @@
-# ClusterWidget
+<p align="center">
+  <img src="assets/icon.png" width="96" alt="ClusterWidget icon">
+</p>
 
-A tiny Windows 11 desktop widget: a rounded, blurred box that shows its first 4 shortcuts (2x2) and expands on
-click to reveal the rest. Think phone-style folders. Built as a .NET Native AOT Win32 app: event-driven, no timers
-while idle, ~2 MB exe.
+<h1 align="center">ClusterWidget</h1>
 
-## Behavior
-- **Icons are the same size as your desktop icons** (read from Explorer's icon-size setting, DPI scaled); *Icon size*
-  scales from there. The box always fits its contents, so icons never overflow or float in empty space.
-- **Several clusters:** every cluster is its own widget with its own icons, position, look and file
-  (`%APPDATA%\ClusterWidget\clusters\*.json`). Create, rename and delete them from the settings window, the right-click
-  menu or the tray menu. A new cluster starts with the current cluster's design.
-- **Closed:** shows 1-16 icons (*Automatic grid*), or an exact *Icons per row* x *Icons per column* grid (for example 5x2).
-  The box is always exactly the icon grid plus the padding on every side, so padding and spacing sliders are literal
-  and icons never shrink. With more icons than slots, the last slot is either a mini 2x2 preview of the rest or just
-  another icon (your choice).
-- **Snap to the desktop grid** (on by default): the box's top-left corner sits on a desktop cell. Turn it off to place
-  the box anywhere, pixel by pixel.
-- **Expanded:** click it. It grows only as much as the items need, evenly on each axis, shifted back inside the work
-  area. Esc or clicking elsewhere closes it. Tiles are exactly as wide as icons, so spacing 0 means icons touching,
-  like the closed box. *Name size* sets the text under the icons.
-- **Re-order:** drag an icon onto another slot in the expanded view; it moves there and the rest shift. *A to Z*, *Z to A* and *Reverse* are on the Icons tab.
-- **Expand from:** center (default) or the top-left corner, which stays exactly where it is while the cluster grows right and down.
-  Use the same padding and spacing for closed and expanded to keep the icons themselves in place too.
-- A new cluster always appears in the middle of the screen.
-- With no more items than the closed count, clicking an icon launches it directly. With more, any click opens the cluster, unless *Clicking an icon opens the app* is on (Icons tab, `clickLaunches`): then normal icons launch and only the mini preview (or the empty box) opens it.
-- It survives **Win+D**: the window is owned by the desktop, so it is raised together with it.
-- Hover an icon for its name and location. Drop files, folders or shortcuts on it to add them. Dropped `.lnk` / `.url` shortcuts are **copied** into `%APPDATA%\ClusterWidget\shortcuts` and the cluster uses the copy, so deleting the original from your desktop never breaks it (programs and folders are referenced by path). Right-click: settings / remove item / new or delete cluster / exit.
+<p align="center">
+  Group your desktop shortcuts into small blurred, fully customizable boxes that open on click.<br>
+  A tiny native Windows 11 app: 0% CPU while idle, about 2 MB, no installer.
+</p>
 
-## Settings window
-Opens from the **gear** (shown while the pointer is over the cluster), the right-click menu or the **tray icon** (hidden-icons
-flyout, no taskbar button). Hover any control for a short explanation. Everything previews live; **Apply changes** saves
-(it is only available when there is something to apply), **Cancel** / **Esc** / the window's X puts everything back to your
-last Apply. The text next to the buttons says "Unsaved changes" or "All changes saved". Enter = Apply, Esc = Cancel, Tab moves between controls.
+<p align="center">
+  <img src="docs/screenshots/closed.png" height="210" alt="A closed cluster">
+  <img src="docs/screenshots/expanded.png" height="210" alt="The same cluster expanded">
+  <img src="docs/screenshots/picture.png" height="210" alt="A cluster with a picture background">
+</p>
 
-- **Top:** *Editing* (which cluster; Rename / New / Delete), *Design* (saved looks; Save as / Delete), *Preview* toggles
-  (*Expanded view* holds the cluster open so you can see edits to it; *Settings icon* shows the gear while you place it).
-- **Tabs:** **Look** (blur, opacity, tint, outline, corners), **Picture** (picture, opacity, overlay color + opacity, zoom,
-  position), **Icons** (automatic grid or icons per row / column, mini preview, click behaviour, sorting),
-  **Size and spacing** (icon size, name size, padding and spacing closed / expanded, presets, names on/off),
-  **Behavior** (snap, expand from, settings icon placement, start with Windows, reset), **About** (how everything works).
-## How the look works
-The wallpaper never changes while the cluster sits on the desktop, so the blur is computed once (reduced resolution, box
-blur) and reused, instead of DWM re-blurring live. That is why blur, opacity and corner radius are all free sliders, and
-why nothing runs while idle. Only the wallpaper is blurred; with *Opacity* below 100% you will see the real desktop icons
-through the box. The blurred background plus tint is also cached at full size so a frame copies pixels instead of
-re-blending them; only the rounded corners are re-drawn.
-## Config
-`%APPDATA%\ClusterWidget\clusters\*.json` (hot reloaded; the settings window writes it too). Colors are `#AARRGGBB` or `#RRGGBB`.
+## Why
 
-| key | meaning |
+Desktops fill up with shortcuts. A **cluster** is a small box that shows a few of them (like a phone folder) and opens
+to show the rest. It sits on your desktop like part of the wallpaper, stays visible when you press Win+D, and costs
+nothing while you are not using it.
+
+- **Looks like it belongs:** blurred wallpaper, tint, outline and corners you control, or your own picture.
+- **Light:** a Native AOT executable of about 2 MB. No timers run while idle (measured 0% CPU), roughly 11-14 MB of
+  memory per cluster.
+- **As many clusters as you like**, each with its own icons, position and look.
+- **Saved designs:** keep a look under a name and apply it to any cluster.
+
+## Install
+
+1. Download `ClusterWidget-<version>-win-x64.zip` from the [Releases](../../releases) page.
+2. Unzip it anywhere (for example `C:\Tools\ClusterWidget`) and run `ClusterWidget.exe`.
+3. Drop shortcuts, folders or programs onto the box that appears. Right-click it for settings.
+
+Windows 11 (x64). The app is not code-signed, so Windows SmartScreen may warn the first time: choose *More info*, then *Run anyway*.
+To start it with Windows, turn on *Start with Windows* (Settings, Behavior tab). To remove it, delete the folder and
+`%APPDATA%\ClusterWidget`.
+
+## Using it
+
+| You want to | Do this |
 |---|---|
-| `expandFrom` | `center` or `topLeft` |
-| `snap`, `x`, `y`, `freeX`, `freeY` | grid snapping, top-left cell (snapped) or pixel (free) |
-| `closedCount`, `boxCols`, `boxRows`, `iconScale`, `clusterPreview` | icons shown closed, icons per row / column (0 = auto), icon size, last slot = mini preview |
-| `backgroundImage`, `imageOpacity`, `imageOverlayColor`, `imageOverlayOpacity`, `imageZoom`, `imagePanX`, `imagePanY` | box picture, its opacity, overlay color and opacity, zoom %, position % |
-| `gearAlways`, `gearCorner`, `gearSize`, `gearOffsetX`/`gearOffsetY` (px, -1 = auto), `outlineOpacity` | stay open, settings icon (auto/topRight/topLeft/bottomRight/bottomLeft, px), outline alpha |
-| `closedPadding`, `closedGap`, `openPadding`, `openGap` | spacing (px at 100%) |
-| `blur`, `opacity`, `tint`, `outlineColor`, `outlineWidth`, `cornerRadius`, `gap` | look |
-| `showLabels`, `labelColor`, `labelSize`, `fontFamily`, `hoverColor` | labels |
-| `animationMs` | expand/collapse time (0 = instant) |
-| `items` | `[{ "path": "...", "name": "optional" }]`: files, folders, `.lnk`, `shell:AppsFolder\...` |
+| Open a cluster | Click it (Esc or click elsewhere closes it) |
+| Add an icon | Drop a file, folder, program or shortcut on it |
+| Move it | Drag the box. It snaps to your desktop icon grid unless you turn that off |
+| Re-order icons | Open it and drag an icon onto another slot, or use A to Z in settings |
+| Open settings | Hover the cluster and click the small gear, or right-click, or use the tray icon |
+| Remove an icon | Right-click the icon |
+| Add another cluster | Right-click, *New cluster* (it appears in the middle of the screen) |
 
-## Build
-Needs the .NET 10 SDK and the Visual Studio C++ build tools (Native AOT links with MSVC).
+Hover any icon for its name and location, and hover any setting for an explanation.
 
-```powershell
+## Customizing
 
-.\tools\dev.ps1              # publish to .\publish, relaunch
-.\tools\dev.ps1 -Shot a.png  # also screenshot the desktop (briefly minimizes windows)
-dotnet test tests\ClusterWidget.Tests
+The settings window changes things live. **Apply changes** keeps them, **Cancel** (or Esc) undoes everything since your
+last Apply.
+
+<p align="center"><img src="docs/screenshots/settings.png" width="460" alt="The settings window"></p>
+
+- **Look:** blur, opacity, tint, outline (color, opacity, thickness) and corner roundness.
+- **Picture:** a background picture with opacity, a second *overlay* color over it, zoom and position.
+- **Icons:** an automatic grid or an exact *icons per row x column*, mini preview or plain last icon, whether a click
+  opens the app or the cluster, sorting.
+- **Size and spacing:** icon size, name size, padding (box edge to icons) and spacing (between icons), separately for
+  the closed and expanded view, plus presets.
+- **Behavior:** snap to grid, expand from the center or the top-left corner, settings icon position and size, start
+  with Windows, *Use this look as my default*.
+- **About:** how everything works, built into the app.
+
+A **design** is a saved look and layout (not icons or position). Save one with *Save as...* at the top and apply it to
+any cluster. *Use this look as my default* makes it the starting look of new clusters and what *Reset* returns to.
+
+## Your files
+
+Everything lives in `%APPDATA%\ClusterWidget` and is plain JSON you can edit while the app runs:
+
+```
+clusters\*.json      one file per cluster (icons, position, look)
+designs\*.json       saved designs
+shortcuts\           copies of .lnk / .url files you dropped, so deleting the original is safe
+pictures\            copies of background pictures you chose
+default-design.json  your default look (optional)
 ```
 
+Colors are `#AARRGGBB` or `#RRGGBB`. See [docs/CONFIG.md](docs/CONFIG.md) for every key.
+
+## How it works (short version)
+
+- Each cluster is a layered window drawn with GDI+ and owned by the desktop window, which is why it stays put
+  when you show the desktop with Win+D.
+- The wallpaper does not change while a cluster sits on it, so the blur is computed once and reused. That makes blur
+  strength, corner radius and opacity free sliders instead of a fixed system effect, and keeps idle cost at zero.
+- Icons come from the same shell image list the desktop uses, at your Windows desktop icon size.
+
+## Build from source
+
+You need the [.NET 10 SDK](https://dotnet.microsoft.com/download) and the Visual Studio C++ build tools
+("Desktop development with C++"), because Native AOT links with the MSVC linker.
+
+```powershell
+dotnet test tests\ClusterWidget.Tests     # layout unit tests
+.\tools\dev.ps1                           # publish to .\publish and start it
+.\tools\package.ps1                       # build the release zip in .\dist
+```
+
+`tools\perf.ps1` runs isolated copies through stress scenarios (hundreds of icons, many clusters, huge icons, pictures)
+and reports CPU, memory and frame times. Set `CLUSTERWIDGET_DIR=<folder>` to run a copy with its own settings, and
+`CLUSTERWIDGET_PERF=<file>` to log timings.
+
 ## Known limits
-- The process is system-DPI-aware (like the desktop itself), so a monitor with a different scale than the primary is bitmap-scaled.
-- A window drawn from the wallpaper cannot blur other windows; it is a desktop widget.
-- Items must fit on screen; extra items beyond the work area's tile capacity are not shown.
-- A wallpaper slideshow/Spotlight change is picked up on the next settings/display change event.
 
-## Performance
+- Windows 11 has no desktop-widget API, so a cluster is a window that lives just above the desktop. It cannot blur
+  other windows, only the wallpaper.
+- The process is system-DPI-aware like the desktop itself, so a monitor with a different scale than the primary one is
+  bitmap-scaled.
+- A cluster shows as many icons as fit on the screen when expanded.
+- A wallpaper slideshow is picked up the next time Windows reports a display or setting change.
+- If a program is moved or deleted, its icon becomes an empty square: remove it or drop it again.
 
-`tools\perf.ps1` runs isolated copies (own settings folder) through stress scenarios and reports CPU, memory, handles and frame times; `tools\ui.ps1` drives one for manual-style checks. Set `CLUSTERWIDGET_PERF=<file>` to make the app log its own timings.
+## Contributing
 
-Typical numbers on a 1920x1200 desktop at 125% scaling: idle CPU 0% (closed, expanded, desktop shown), about 11-14 MB private memory per cluster with a few dozen icons, expand animation 4-6 ms per frame for normal clusters, hover redraw 3-5 ms. A 400-icon cluster filling the screen: 21 ms hover redraw, ~55 MB. Eight clusters with 150 icons each: ~120-130 MB total, hover 14 ms. A background picture on a big cluster is the slowest case (36 ms hover) because the picture is re-drawn each time.
+Bug reports and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). Release notes are in
+[CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+[MIT](LICENSE)

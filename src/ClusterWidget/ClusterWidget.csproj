@@ -8,6 +8,13 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\icon.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <Product>ClusterWidget</Product>
+    <Description>Desktop widget that groups shortcuts into a blurred, customizable box that opens on click.</Description>
+    <Copyright>Copyright (c) 2026 ClusterWidget contributors</Copyright>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
 
     <!-- Light by design: AOT, no globalization data, no reflection serializers. -->
     <PublishAot>true</PublishAot>

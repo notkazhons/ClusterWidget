@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClusterWidget</title>
+<meta name="description" content="Group your desktop shortcuts into small blurred, customizable boxes that open on click. Native Windows 11 app, 0% CPU while idle.">
+<link rel="icon" href="../assets/icon.png">
+<style>
+  :root {
+    --bg: #f6f5fb; --card: #ffffff; --text: #1d1b2b; --muted: #5d5a72; --accent: #6a4fe0; --accent2: #2fa8e8; --line: #e4e1f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131221; --card: #1c1a30; --text: #f1effa; --muted: #a9a5c4; --accent: #9a85ff; --accent2: #4cc2ff; --line: #2c2946; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 "Segoe UI", system-ui, sans-serif; }
+  a { color: var(--accent); }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 20px; }
+  header.hero { padding: 64px 0 36px; text-align: center; }
+  header.hero img.logo { width: 88px; height: 88px; }
+  h1 { font-size: clamp(2rem, 6vw, 3.2rem); margin: 12px 0 6px; letter-spacing: -0.02em; }
+  .tag { color: var(--muted); font-size: 1.15rem; max-width: 640px; margin: 0 auto 26px; }
+  .btn { display: inline-block; padding: 12px 22px; border-radius: 12px; text-decoration: none; font-weight: 600; margin: 4px; }
+  .btn.primary { background: linear-gradient(135deg, var(--accent2), var(--accent)); color: #fff; }
+  .btn.ghost { border: 1px solid var(--line); color: var(--text); background: var(--card); }
+  .shots { display: flex; flex-wrap: wrap; gap: 18px; justify-content: center; margin: 34px 0 10px; }
+  .shots img { height: 230px; max-width: 100%; border-radius: 16px; box-shadow: 0 10px 30px rgba(20, 10, 60, .25); }
+  section { padding: 34px 0; }
+  h2 { font-size: 1.6rem; margin: 0 0 18px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+  .card p { margin: 0; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 14px; overflow: hidden; border: 1px solid var(--line); }
+  td, th { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 600; width: 34%; }
+  code { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; font-size: .92em; }
+  .settings { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
+  .settings img { width: 440px; max-width: 100%; border-radius: 12px; box-shadow: 0 10px 30px rgba(20, 10, 60, .25); }
+  .settings ul { flex: 1; min-width: 260px; margin: 0; padding-left: 20px; color: var(--muted); }
+  .settings li { margin: 6px 0; }
+  footer { padding: 40px 0 60px; text-align: center; color: var(--muted); font-size: .92rem; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <img class="logo" src="../assets/icon.png" alt="">
+    <h1>ClusterWidget</h1>
+    <p class="tag">Group your desktop shortcuts into small blurred, fully customizable boxes that open on click. A tiny native Windows&nbsp;11 app: 0% CPU while idle, about 2&nbsp;MB, no installer.</p>
+    <a class="btn primary" href="https://github.com/notkazhons/ClusterWidget/releases/latest">Download for Windows 11</a>
+    <a class="btn ghost" href="https://github.com/notkazhons/ClusterWidget">View on GitHub</a>
+    <div class="shots">
+      <img src="screenshots/closed.png" alt="A closed cluster">
+      <img src="screenshots/expanded.png" alt="An expanded cluster">
+      <img src="screenshots/picture.png" alt="A cluster with a picture background">
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <h2>Why you might like it</h2>
+    <div class="grid">
+      <div class="card"><h3>Opens like a phone folder</h3><p>A cluster shows a few shortcuts and opens on click to reveal the rest. Drag icons to re-order them.</p></div>
+      <div class="card"><h3>Looks like it belongs</h3><p>Blurred wallpaper, tint, outline and rounded corners you control. Or use your own picture with an overlay color.</p></div>
+      <div class="card"><h3>Practically free</h3><p>Nothing runs while idle (measured 0% CPU). Roughly 11-14&nbsp;MB per cluster, 2&nbsp;MB executable.</p></div>
+      <div class="card"><h3>As many as you want</h3><p>Every cluster has its own icons, position and look. Save a design once, reuse it on all of them.</p></div>
+      <div class="card"><h3>Survives Win+D</h3><p>Clusters stay on screen when you show the desktop, and snap to your desktop icon grid.</p></div>
+      <div class="card"><h3>Friendly settings</h3><p>Live preview, Apply / Cancel, a hint on every control, and a built-in About page.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Customize everything, with a window instead of a config file</h2>
+    <div class="settings">
+      <img src="screenshots/settings.png" alt="The settings window">
+      <ul>
+        <li><b>Look:</b> blur, opacity, tint, outline, corner roundness</li>
+        <li><b>Picture:</b> background picture, overlay color, zoom, position</li>
+        <li><b>Icons:</b> automatic or exact icons per row and column, mini preview, sorting</li>
+        <li><b>Size and spacing:</b> icon size, padding and spacing for closed and expanded views</li>
+        <li><b>Behavior:</b> snap to grid, expand from center or top-left, settings icon, start with Windows</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quick start</h2>
+    <table>
+      <tr><th>Install</th><td>Download the zip from <a href="https://github.com/notkazhons/ClusterWidget/releases/latest">Releases</a>, unzip anywhere and run <code>ClusterWidget.exe</code>.</td></tr>
+      <tr><th>Add icons</th><td>Drop files, folders, programs or shortcuts onto the box.</td></tr>
+      <tr><th>Open / close</th><td>Click it to open. Esc or a click elsewhere closes it.</td></tr>
+      <tr><th>Settings</th><td>Hover the cluster and click the gear, right-click it, or use the tray icon.</td></tr>
+      <tr><th>More clusters</th><td>Right-click, <i>New cluster</i>.</td></tr>
+    </table>
+    <p style="color:var(--muted)">The app is not code-signed, so SmartScreen may warn the first time: choose <i>More info</i>, then <i>Run anyway</i>.</p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">MIT licensed &middot; <a href="https://github.com/notkazhons/ClusterWidget">source on GitHub</a> &middot; <a href="https://github.com/notkazhons/ClusterWidget/blob/main/docs/CONFIG.md">configuration reference</a></div>
+</footer>
+</body>
+</html>
