@@ -86,6 +86,7 @@ internal sealed unsafe class SettingsWindow
         "- Drop files, folders, programs or shortcuts onto it to add them. Shortcuts are copied into the app's own folder, so deleting the original from your desktop is safe.\r\n" +
         "- Open view: drag an icon onto another slot to re-order, or use A to Z / Z to A on the Icons tab.\r\n" +
         "- Right-click: settings, arrange icons, remove an icon, new or delete cluster, exit.\r\n" +
+        "- Keyboard only: with the desktop in front, press Tab to step into the clusters. A cluster that can open opens by itself; Tab / Shift+Tab or the arrow keys move between its icons, Enter opens the focused app, Esc goes back to the desktop. Tab past the last icon continues with the next cluster, then the taskbar.\r\n" +
         "- Move the mouse over a cluster to see the settings icon (it opens this window). Hover any icon to see its name and location.\r\n\r\n" +
         "THIS WINDOW\r\n" +
         "- Changes show live. Apply changes keeps them; Cancel undoes everything since your last Apply. The status next to the buttons tells you which.\r\n" +

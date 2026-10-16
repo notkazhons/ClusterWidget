@@ -56,6 +56,7 @@ To start it with Windows, turn on *Start with Windows* (Settings, Behavior tab).
 | Re-order icons | Open it and drag an icon onto another slot, or use A to Z in settings |
 | Open settings | Hover the cluster and click the small gear, or right-click, or use the tray icon |
 | Remove an icon | Right-click the icon |
+| Use only the keyboard | With the desktop in front press **Tab**: it steps into the clusters (one that can open opens itself). **Tab** / **Shift+Tab** or the arrow keys move between icons, **Enter** opens the focused app, **Esc** goes back to the desktop. Past the last icon it carries on to the next cluster and then the taskbar |
 | Add another cluster | Right-click, *New cluster* (it appears in the middle of the screen) |
 
 Hover any icon for its name and location, and hover any setting for an explanation.

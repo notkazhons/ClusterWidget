@@ -3,6 +3,11 @@
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Keyboard navigation: Tab from the desktop enters the clusters, Tab / Shift+Tab / arrows move between icons, Enter opens the focused app, Esc returns to the desktop. A keyboard hook is only installed while the desktop is in front.
+
 ## [1.0.0] - 2026-10-16
 
 First public release.

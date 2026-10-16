@@ -13,12 +13,14 @@ namespace ClusterWidget;
 /// </summary>
 internal static unsafe class App
 {
-    private const uint WM_TRAY = Native.WM_APP + 3, WM_FILES_CHANGED = Native.WM_APP + 1;
+    private const uint WM_TRAY = Native.WM_APP + 3, WM_FILES_CHANGED = Native.WM_APP + 1, WM_KB_TAB = Native.WM_APP + 4;
+    private const nuint MagicExtra = 0x43574B42; // marks the keys this app sends itself ("CWKB"), so its own hook ignores them
     private const nuint TimerSync = 1;
 
     public static readonly List<Widget> Widgets = new();
 
-    private static nint _hwnd, _trayIcon;
+    private static nint _hwnd, _trayIcon, _fgHook, _kbHook;
+    private static bool _swallowTabUp;
     private static uint _taskbarCreated;
     private static nuint _gdipToken;
     private static FileSystemWatcher? _watcher;
@@ -33,6 +35,10 @@ internal static unsafe class App
         MigrateAndLoad();
         AddTrayIcon();
         StartWatcher();
+        // Keyboard access: watch (cheaply, event driven) which window is in front. Only while the desktop is in front is a
+        // keyboard hook installed, so Tab on the desktop can lead into the clusters. Otherwise nothing is hooked.
+        _fgHook = Native.SetWinEventHook(0x3 /* EVENT_SYSTEM_FOREGROUND */, 0x3, 0, (nint)(delegate* unmanaged[Stdcall]<nint, uint, nint, int, int, uint, uint, void>)&ForegroundChanged, 0, 0, 0);
+        UpdateKeyboardHook(Native.GetForegroundWindow());
         Native.EmptyWorkingSet(Native.GetCurrentProcess());
 
         while (Native.GetMessage(out MSG m, 0, 0, 0) > 0)
@@ -42,12 +48,102 @@ internal static unsafe class App
         }
 
         RemoveTrayIcon();
+        if (_fgHook != 0) Native.UnhookWinEvent(_fgHook);
+        RemoveKeyboardHook();
         _watcher?.Dispose();
         foreach (var w in Widgets.ToArray()) w.Destroy();
         Gdip.GdiplusShutdown(_gdipToken);
     }
 
     public static void Quit() => Native.PostQuitMessage(0);
+
+    // ---------------------------------------------------------------- keyboard navigation between the desktop and the clusters
+
+    private static bool IsDesktop(nint hwnd)
+    {
+        if (hwnd == 0) return false;
+        char* buf = stackalloc char[64];
+        int n = Native.GetClassName(hwnd, buf, 64);
+        string cls = new string(buf, 0, n);
+        return (cls == "Progman" || cls == "WorkerW") && Native.FindWindowEx(hwnd, 0, "SHELLDLL_DefView", null) != 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static void ForegroundChanged(nint hook, uint ev, nint hwnd, int idObject, int idChild, uint thread, uint time)
+    {
+        try { UpdateKeyboardHook(hwnd); } catch (Exception) { /* never let an exception cross into native code */ }
+    }
+
+    private static void UpdateKeyboardHook(nint foreground)
+    {
+        bool desktop = Widgets.Count > 0 && IsDesktop(foreground);
+        if (desktop && _kbHook == 0)
+            _kbHook = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, (nint)(delegate* unmanaged[Stdcall]<int, nint, nint, nint>)&KeyboardHook, Native.GetModuleHandle(0), 0);
+        else if (!desktop) RemoveKeyboardHook();
+    }
+
+    private static void RemoveKeyboardHook()
+    {
+        if (_kbHook != 0) { Native.UnhookWindowsHookEx(_kbHook); _kbHook = 0; }
+        _swallowTabUp = false;
+    }
+
+    /// <summary>Only Tab is looked at, and only while the desktop is in front: it is taken over to enter the clusters.</summary>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static nint KeyboardHook(int code, nint wp, nint lp)
+    {
+        try
+        {
+            if (code >= 0)
+            {
+                var k = (KBDLLHOOKSTRUCT*)lp;
+                bool ours = (k->flags & 0x10 /* LLKHF_INJECTED */) != 0 && k->extra == (nint)MagicExtra;
+                if (k->vkCode == 0x09 && !ours && Widgets.Count > 0 && Native.GetAsyncKeyState(0x11) >= 0 && Native.GetAsyncKeyState(0x12) >= 0)
+                {
+                    if (wp == 0x100) { _swallowTabUp = true; Native.PostMessage(_hwnd, WM_KB_TAB, Native.GetAsyncKeyState(0x10) < 0 ? 1 : 0, 0); return 1; }
+                    if (wp == 0x101 && _swallowTabUp) { _swallowTabUp = false; return 1; }
+                }
+            }
+        }
+        catch (Exception) { /* fall through to the next hook */ }
+        return Native.CallNextHookEx(0, code, wp, lp);
+    }
+
+    /// <summary>Makes <paramref name="hwnd"/> the foreground window even though no input arrived for it (a tap on Alt lifts Windows' restriction).</summary>
+    internal static void ForceForeground(nint hwnd)
+    {
+        Native.keybd_event(0x12, 0, 0, MagicExtra);
+        Native.keybd_event(0x12, 0, 2 /* KEYUP */, MagicExtra);
+        Native.SetForegroundWindow(hwnd);
+    }
+
+    private static List<Widget> InReadingOrder() => Widgets.OrderBy(w => w.ScreenOrder.Top).ThenBy(w => w.ScreenOrder.Left).ToList();
+
+    /// <summary>Tab from the desktop: step into the first cluster (Shift+Tab: the last one).</summary>
+    private static void EnterClusters(bool fromEnd)
+    {
+        var order = InReadingOrder();
+        if (order.Count == 0) return;
+        (fromEnd ? order[^1] : order[0]).KeyboardEnter(fromEnd);
+    }
+
+    /// <summary>The cluster after / before <paramref name="from"/>, or back to the desktop (and on to the taskbar) past the ends.</summary>
+    internal static void FocusNeighbour(Widget from, bool forward)
+    {
+        var order = InReadingOrder();
+        int i = order.IndexOf(from) + (forward ? 1 : -1);
+        if (i >= 0 && i < order.Count) order[i].KeyboardEnter(!forward);
+        else ReturnToDesktop(forward);
+    }
+
+    /// <summary>Gives the keyboard back to the desktop. Moving forward past the last cluster continues with a Tab, so focus carries on to the taskbar.</summary>
+    internal static void ReturnToDesktop(bool continueForward)
+    {
+        ForceForeground(Native.GetShellWindow());
+        if (!continueForward) return;
+        Native.keybd_event(0x09, 0, 0, MagicExtra);
+        Native.keybd_event(0x09, 0, 2, MagicExtra);
+    }
 
     // ---------------------------------------------------------------- clusters
 
@@ -161,6 +257,9 @@ internal static unsafe class App
                         case 0x202 /* WM_LBUTTONUP */: if (Widgets.Count > 0) SettingsWindow.Show(SettingsWindow.Target ?? Widgets[0]); break;
                         case 0x205 /* WM_RBUTTONUP */: TrayMenu(); break;
                     }
+                    return 0;
+                case WM_KB_TAB:
+                    EnterClusters(w != 0);
                     return 0;
                 case WM_FILES_CHANGED:
                     Native.SetTimer(h, TimerSync, 300, 0); // debounce: editors write in bursts

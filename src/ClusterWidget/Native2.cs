@@ -107,6 +107,13 @@ internal static unsafe partial class Native
     [LibraryImport("user32.dll")] public static partial nint GetWindowDpiAwarenessContext(nint h);
     [LibraryImport("user32.dll")] public static partial nint SetThreadDpiAwarenessContext(nint ctx);
     [LibraryImport("user32.dll")] public static partial int GetAwarenessFromDpiAwarenessContext(nint ctx);
+    [LibraryImport("user32.dll")] public static partial nint SetWinEventHook(uint min, uint max, nint mod, nint proc, uint pid, uint tid, uint flags);
+    [LibraryImport("user32.dll")] public static partial int UnhookWinEvent(nint hook);
+    [LibraryImport("user32.dll")] public static partial nint GetForegroundWindow();
+    [LibraryImport("user32.dll", EntryPoint = "GetClassNameW")] public static partial int GetClassName(nint h, char* buf, int max);
+    [LibraryImport("user32.dll")] public static partial short GetKeyState(int vk);
+    [LibraryImport("user32.dll")] public static partial short GetAsyncKeyState(int vk);
+    [LibraryImport("user32.dll")] public static partial void keybd_event(byte vk, byte scan, uint flags, nuint extra);
     [LibraryImport("user32.dll")] public static partial nint GetDlgItem(nint h, int id);
     [LibraryImport("user32.dll", EntryPoint = "GetWindowTextW")] public static partial int GetWindowText(nint h, char* buf, int max);
     [LibraryImport("user32.dll")] public static partial int EnableWindow(nint h, int enable);

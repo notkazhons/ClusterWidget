@@ -73,6 +73,8 @@ internal sealed unsafe class Widget
     private float _animFrom;
     private long _animStart;
     private bool _pressed, _dragging, _tracking, _inMenu, _downGear, _hoverGear, _inside, _allowZ;
+    private bool _kbMode;                 // keyboard navigation: this cluster has the focus and _kbIndex is the focused icon
+    private int _kbIndex;
     private bool _dead;                    // destroyed: must never write its file again (that would resurrect a deleted cluster)
     private int _itemDrag = -1, _itemDragTarget = -1, _itemDragX, _itemDragY;   // reordering icons by dragging them in the expanded view
     private bool _preview, _gearPreview;      // settings-window toggles: hold the cluster open / show the settings icon
@@ -913,6 +915,18 @@ internal sealed unsafe class Widget
             Gdip.GdipDeletePath(hp);
         }
 
+        if (_kbMode && i == _kbIndex)
+        {
+            float pad = Math.Max(3f * _u, LerpF(_gapC, _gapO, _t) / 2f);
+            nint fp = RoundRect(r.X - pad, r.Y - pad, r.W + pad * 2, r.H + pad * 2, MathF.Min(Radius * 0.5f, 14 * _u));
+            Gdip.GdipFillPath(_g, _brushHover, fp);
+            Gdip.GdipCreatePen1(0xFFFFFFFF, MathF.Max(2f, 2.5f * _u), 2, out nint ring);   // white ring with a dark edge: visible on any background
+            Gdip.GdipCreatePen1(0x99000000, MathF.Max(1f, 1f * _u), 2, out nint edge);
+            Gdip.GdipDrawPath(_g, edge, fp);
+            Gdip.GdipDrawPath(_g, ring, fp);
+            Gdip.GdipDeletePen(ring); Gdip.GdipDeletePen(edge); Gdip.GdipDeletePath(fp);
+        }
+
         float left = r.X + (r.W - _iconPx) / 2, top = r.Y;
         bool cluster = i == _ke - 1 && Clustered && _cfg.ClusterPreview;
         if (cluster) DrawCluster(i, left, top, 1f - _t);
@@ -1100,6 +1114,7 @@ internal sealed unsafe class Widget
     private void Launch(int i)
     {
         if (i < 0 || i >= _slots.Count) return;
+        if (Perf.On) Perf.Log($"[{_cfg.Name}] launch #{i} {_slots[i].Item.Path}");
         Native.ShellExecute(_hwnd, "open", _slots[i].Item.Path, null, null, 1);
     }
 
@@ -1143,6 +1158,76 @@ internal sealed unsafe class Widget
             return dst;
         }
         catch (Exception) { return path; } // could not copy: fall back to pointing at the original
+    }
+
+    // ---------------------------------------------------------------- keyboard navigation
+
+    /// <summary>Position in the reading order of the clusters on screen (top to bottom, then left to right).</summary>
+    internal (int Top, int Left) ScreenOrder => (_pa.Top, _pa.Left);
+
+    /// <summary>
+    /// Brings keyboard focus to this cluster (Tab from the desktop). A cluster that can open is opened, and the focus lands
+    /// on its first icon (or its last one when arriving with Shift+Tab). Tab / arrows move, Enter opens, Esc leaves.
+    /// </summary>
+    internal void KeyboardEnter(bool fromEnd)
+    {
+        if (_dead || _slots.Count == 0) { KeyboardLeave(!fromEnd); return; }
+        _kbMode = true;
+        HideTip();
+        App.ForceForeground(_hwnd);
+        if (Clustered) Expand(); // it can open, so open it; icons are then reachable one by one
+        _kbIndex = fromEnd ? KbLast() : 0;
+        Native.SetFocus(_hwnd);
+        Frame();
+        if (Perf.On) Perf.Log($"[{_cfg.Name}] keyboard focus in at {_kbIndex} (expanded={Clustered})");
+    }
+
+    /// <summary>The last icon that can be focused: every shown icon when it can open, otherwise the closed ones.</summary>
+    private int KbLast() => (Clustered ? ShownCount : Math.Min(_slots.Count, _ke)) - 1;
+
+    private void KeyboardLeave(bool forward)
+    {
+        _kbMode = false;
+        if (_target == 1 && !_preview) Collapse();
+        Frame();
+        App.FocusNeighbour(this, forward);
+    }
+
+    private void KeyDown(int vk)
+    {
+        int last = KbLast(), cols = Clustered ? Math.Max(1, _ecols) : Math.Max(1, _ccols);
+        switch (vk)
+        {
+            case 0x09: // Tab / Shift+Tab: next / previous icon, then on to the next cluster
+            {
+                bool back = Native.GetKeyState(0x10) < 0;
+                int next = _kbIndex + (back ? -1 : 1);
+                if (next < 0 || next > last) KeyboardLeave(!back);
+                else { _kbIndex = next; Frame(); }
+                break;
+            }
+            case 0x27: if (_kbIndex < last) { _kbIndex++; Frame(); } break;                         // right
+            case 0x25: if (_kbIndex > 0) { _kbIndex--; Frame(); } break;                            // left
+            case 0x28: _kbIndex = Math.Min(last, _kbIndex + cols); Frame(); break;                  // down
+            case 0x26: _kbIndex = Math.Max(0, _kbIndex - cols); Frame(); break;                     // up
+            case 0x24: _kbIndex = 0; Frame(); break;                                                // home
+            case 0x23: _kbIndex = last; Frame(); break;                                             // end
+            case 0x0D: case 0x20: // Enter / Space: open the focused app
+            {
+                int i = _kbIndex;
+                _kbMode = false;
+                Launch(i);
+                if (_target == 1 && !_preview) Collapse();
+                Frame();
+                break;
+            }
+            case 0x1B: // Esc: close it and go back to the desktop
+                _kbMode = false;
+                if (_target == 1 && !_preview) Collapse();
+                Frame();
+                App.ReturnToDesktop(false);
+                break;
+        }
     }
 
     private void AddFiles(nint drop)
@@ -1223,17 +1308,20 @@ internal sealed unsafe class Widget
             case Native.WM_ACTIVATE:
                 if ((wp & 0xFFFF) == 0 && !_inMenu)
                 {
+                    if (_kbMode) { _kbMode = false; Frame(); }
                     // lost focus: clicked elsewhere. With "stay open" it just drops back to the desktop layer, still expanded.
                     if (_preview && _target == 1) SendToBottom(); else Collapse();
                 }
                 return 0;
 
             case Native.WM_KEYDOWN:
+                if (_kbMode) { KeyDown((int)wp); return 0; }
                 if (wp == 0x1B && !_preview) Collapse();
                 return 0;
 
             case Native.WM_LBUTTONDOWN:
             {
+                if (_kbMode) { _kbMode = false; Frame(); }
                 HideTip();
                 _pressed = true; _dragging = false;
                 Native.GetCursorPos(out _downPt);
