@@ -8,9 +8,9 @@ while idle, ~2 MB exe.
 - **Icons are the same size as your desktop icons** (read from Explorer's icon-size setting, DPI scaled); *Icon size*
   and *Cluster size* scale from there. The box always fits its contents, so icons never overflow or float in empty space.
 - **Closed:** shows 1-16 icons (your choice). If there are more items, the last slot becomes a mini 2x2 preview of the rest.
-- **Size:** *Width/Height (grid cells)* give the closed box a fixed size in desktop cells (for example 2x6); 0 = auto,
-  where the box fits its icons exactly so the padding and spacing sliders are literal. In a fixed box the icons keep
-  their size and are arranged to suit its shape; they only shrink if they cannot all fit.
+- **Layout:** *Icons per row* x *Icons per column* set the closed grid (for example 5x2); 0 = automatic. The box is always
+  exactly the icon grid plus the padding on every side, so padding and spacing sliders are literal and icons never shrink.
+- **Background image:** pick a picture in settings; it covers the box, with zoom and position sliders. Opacity and tint apply on top.
 - **Snap to the desktop grid** (on by default): the box's top-left corner sits on a desktop cell. Turn it off to place
   the box anywhere, pixel by pixel.
 - **Expanded:** click it. It grows only as much as the items need, evenly on each axis, shifted back inside the work
@@ -22,7 +22,7 @@ while idle, ~2 MB exe.
 - Drop files, folders or shortcuts on it to add them. Right-click: settings / reload / open config / remove item / exit.
 - The **gear** appears only while the pointer is over the cluster and opens the settings window (live preview). Its
   position is automatic by default (scales with the icons and picks a corner where it overlaps nothing) or a corner
-  of your choice, with its own size. The same window opens from the **tray icon** (hidden-icons flyout, no taskbar button).
+  of your choice, with its own size and its distance from the box edge (X and Y). The same window opens from the **tray icon** (hidden-icons flyout, no taskbar button).
 - Settings also has: outline opacity, *Stay open when clicking away* (keeps the expanded cluster open while you edit;
   click empty space in it to close), *Start with Windows* (per-user Run entry for the exe's current path), and *Reset
   all* (asks first).
@@ -39,8 +39,9 @@ radius are all free sliders, and why nothing runs while idle. Only the wallpaper
 | key | meaning |
 |---|---|
 | `snap`, `x`, `y`, `freeX`, `freeY` | grid snapping, top-left cell (snapped) or pixel (free) |
-| `closedCount`, `boxCols`, `boxRows`, `iconScale` | icons shown closed, closed size in cells (0 = auto), icon size |
-| `keepOpen`, `gearCorner`, `gearSize`, `outlineOpacity` | stay open, settings icon (auto/topRight/topLeft/bottomRight/bottomLeft, px), outline alpha |
+| `closedCount`, `boxCols`, `boxRows`, `iconScale` | icons shown closed, icons per row / column (0 = auto), icon size |
+| `backgroundImage`, `imageZoom`, `imagePanX`, `imagePanY` | box picture path, zoom %, position % |
+| `keepOpen`, `gearCorner`, `gearSize`, `gearOffsetX`/`gearOffsetY` (px, -1 = auto), `outlineOpacity` | stay open, settings icon (auto/topRight/topLeft/bottomRight/bottomLeft, px), outline alpha |
 | `closedPadding`, `closedGap`, `openPadding`, `openGap` | spacing (px at 100%) |
 | `blur`, `opacity`, `tint`, `outlineColor`, `outlineWidth`, `cornerRadius`, `gap` | look |
 | `showLabels`, `labelColor`, `labelSize`, `fontFamily`, `hoverColor` | labels |

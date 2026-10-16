@@ -7,6 +7,15 @@ namespace ClusterWidget;
 internal struct SIZE { public int cx, cy; }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct OPENFILENAME
+{
+    public uint lStructSize; public nint hwndOwner, hInstance; public char* lpstrFilter, lpstrCustomFilter; public uint nMaxCustFilter, nFilterIndex;
+    public char* lpstrFile; public uint nMaxFile; public char* lpstrFileTitle; public uint nMaxFileTitle; public char* lpstrInitialDir, lpstrTitle;
+    public uint Flags; public ushort nFileOffset, nFileExtension; public char* lpstrDefExt; public nint lCustData, lpfnHook; public char* lpTemplateName;
+    public nint pvReserved; public uint dwReserved, FlagsEx;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct ICONINFO { public int fIcon; public uint xHotspot, yHotspot; public nint hbmMask, hbmColor; }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -101,6 +110,7 @@ internal static unsafe partial class Native
 
     [LibraryImport("comctl32.dll")] public static partial int InitCommonControlsEx(in INITCOMMONCONTROLSEX icc);
     [LibraryImport("comdlg32.dll", EntryPoint = "ChooseColorW")] public static partial int ChooseColor(ref CHOOSECOLOR cc);
+    [LibraryImport("comdlg32.dll", EntryPoint = "GetOpenFileNameW")] public static partial int GetOpenFileName(ref OPENFILENAME ofn);
 
     [LibraryImport("advapi32.dll", EntryPoint = "RegGetValueW", StringMarshalling = StringMarshalling.Utf16)]
     private static partial int RegGetValue(nint hkey, string subKey, string value, uint flags, out uint type, void* data, ref uint size);

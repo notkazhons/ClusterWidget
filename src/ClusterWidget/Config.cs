@@ -39,7 +39,20 @@ internal sealed class Config
     public int FreeY { get; set; } = 100;
     /// <summary>How many icons the closed box shows (the last one becomes a preview of the rest when there are more).</summary>
     public int ClosedCount { get; set; } = 4;
-    /// <summary>Closed box size in desktop cells, width x height. 0 in either = automatic (the box fits its icons exactly).</summary>
+    /// <summary>Background picture (png, jpg, bmp, gif, tif) drawn inside the box instead of the blurred wallpaper. Empty = none.</summary>
+    public string BackgroundImage { get; set; } = "";
+    /// <summary>Picture zoom in percent (100 = just covers the box).</summary>
+    public int ImageZoom { get; set; } = 100;
+    /// <summary>Which part of a zoomed picture shows, 0-100 (50 = centred).</summary>
+    public int ImagePanX { get; set; } = 50;
+    public int ImagePanY { get; set; } = 50;
+    /// <summary>Distance of the settings icon from the box edge, horizontally / vertically, in pixels at 100%. -1 = automatic.</summary>
+    public int GearOffsetX { get; set; } = -1;
+    public int GearOffsetY { get; set; } = -1;
+    /// <summary>
+    /// Icons per row and per column of the closed box. 0 in either = automatic. The box is always exactly
+    /// the icon grid plus the padding, so it grows or shrinks with the padding; icons never shrink.
+    /// </summary>
     public int BoxCols { get; set; } = 0;
     public int BoxRows { get; set; } = 0;
     /// <summary>Keep the expanded cluster open when clicking elsewhere (handy while editing settings).</summary>
@@ -82,7 +95,10 @@ internal sealed class Config
     public int AnimationMs { get; set; } = 160;
     public List<Item> Items { get; set; } = new();
 
-    public static string Dir => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ClusterWidget");
+    /// <summary>Config folder. CLUSTERWIDGET_DIR overrides it (used to test a second instance without touching real settings).</summary>
+    public static string Dir => Environment.GetEnvironmentVariable("CLUSTERWIDGET_DIR") is { Length: > 0 } d
+        ? d
+        : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ClusterWidget");
     public static string FilePath => System.IO.Path.Combine(Dir, "config.json");
 
     public static Config Load()
@@ -116,7 +132,8 @@ internal sealed class Config
     {
         var d = new Config();
         ClosedCount = d.ClosedCount; BoxCols = d.BoxCols; BoxRows = d.BoxRows; OutlineOpacity = d.OutlineOpacity;
-        GearCorner = d.GearCorner; GearSize = d.GearSize; ClosedPadding = d.ClosedPadding; ClosedGap = d.ClosedGap;
+        GearCorner = d.GearCorner; GearSize = d.GearSize; GearOffsetX = d.GearOffsetX; GearOffsetY = d.GearOffsetY;
+        BackgroundImage = d.BackgroundImage; ImageZoom = d.ImageZoom; ImagePanX = d.ImagePanX; ImagePanY = d.ImagePanY; ClosedPadding = d.ClosedPadding; ClosedGap = d.ClosedGap;
         OpenPadding = d.OpenPadding; OpenGap = d.OpenGap;
         Opacity = d.Opacity; Tint = d.Tint; Blur = d.Blur; OutlineColor = d.OutlineColor; OutlineWidth = d.OutlineWidth;
         CornerRadius = d.CornerRadius; IconScale = d.IconScale; ShowLabels = d.ShowLabels;
@@ -125,6 +142,12 @@ internal sealed class Config
     private void Sanitize()
     {
         ClosedCount = Math.Clamp(ClosedCount, 1, 16);
+        BackgroundImage ??= "";
+        ImageZoom = Math.Clamp(ImageZoom, 100, 400);
+        ImagePanX = Math.Clamp(ImagePanX, 0, 100);
+        ImagePanY = Math.Clamp(ImagePanY, 0, 100);
+        GearOffsetX = Math.Clamp(GearOffsetX, -1, 120);
+        GearOffsetY = Math.Clamp(GearOffsetY, -1, 120);
         BoxCols = Math.Clamp(BoxCols, 0, 20);
         BoxRows = Math.Clamp(BoxRows, 0, 20);
         OutlineOpacity = Math.Clamp(OutlineOpacity, 0, 100);

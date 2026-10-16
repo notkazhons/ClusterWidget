@@ -10,9 +10,9 @@ internal sealed unsafe class SettingsWindow
     private enum Kind { Slider, TintSwatch, OutlineSwatch }
 
     private sealed record Def(string Label, Kind Kind, int Min = 0, int Max = 0, string Unit = "",
-        Func<Config, int>? Get = null, Action<Config, int>? Set = null, bool Blur = false, bool AutoAtZero = false);
+        Func<Config, int>? Get = null, Action<Config, int>? Set = null, bool Blur = false, int? AutoAt = null);
 
-    private const int IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdKeepOpen = 304, IdStartup = 305, IdGear = 306, IdBase = 100;
+    private const int IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdKeepOpen = 304, IdStartup = 305, IdGear = 306, IdImgChoose = 307, IdImgClear = 308, IdBase = 100;
     private const int RowH = 40, LeftX = 16, RightX = 404;
 
     private static readonly Def[] Look =
@@ -26,19 +26,24 @@ internal sealed unsafe class SettingsWindow
         new("Outline opacity", Kind.Slider, 0, 100, "%", c => c.OutlineOpacity, (c, v) => c.OutlineOpacity = v),
         new("Outline thickness", Kind.Slider, 0, 12, "px", c => (int)MathF.Round(c.OutlineWidth), (c, v) => c.OutlineWidth = v),
         new("Corner roundness", Kind.Slider, 0, 100, "px", c => (int)MathF.Round(c.CornerRadius), (c, v) => c.CornerRadius = v),
+        new("Image zoom", Kind.Slider, 100, 400, "%", c => c.ImageZoom, (c, v) => c.ImageZoom = v),
+        new("Image position X", Kind.Slider, 0, 100, "%", c => c.ImagePanX, (c, v) => c.ImagePanX = v),
+        new("Image position Y", Kind.Slider, 0, 100, "%", c => c.ImagePanY, (c, v) => c.ImagePanY = v),
     };
 
     private static readonly Def[] Layouts =
     {
         new("Icons when closed", Kind.Slider, 1, 16, "", c => c.ClosedCount, (c, v) => c.ClosedCount = v),
-        new("Width (grid cells)", Kind.Slider, 0, 12, "", c => c.BoxCols, (c, v) => c.BoxCols = v, AutoAtZero: true),
-        new("Height (grid cells)", Kind.Slider, 0, 12, "", c => c.BoxRows, (c, v) => c.BoxRows = v, AutoAtZero: true),
+        new("Icons per row", Kind.Slider, 0, 12, "", c => c.BoxCols, (c, v) => c.BoxCols = v, AutoAt: 0),
+        new("Icons per column", Kind.Slider, 0, 12, "", c => c.BoxRows, (c, v) => c.BoxRows = v, AutoAt: 0),
         new("Icon size", Kind.Slider, 50, 200, "%", c => (int)MathF.Round(c.IconScale * 100), (c, v) => c.IconScale = v / 100f),
         new("Padding, closed", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.ClosedPadding), (c, v) => c.ClosedPadding = v),
         new("Spacing, closed", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.ClosedGap), (c, v) => c.ClosedGap = v),
         new("Padding, expanded", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.OpenPadding), (c, v) => c.OpenPadding = v),
         new("Spacing, expanded", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.OpenGap), (c, v) => c.OpenGap = v),
-        new("Settings icon size", Kind.Slider, 0, 40, "px", c => c.GearSize, (c, v) => c.GearSize = v, AutoAtZero: true),
+        new("Settings icon size", Kind.Slider, 0, 40, "px", c => c.GearSize, (c, v) => c.GearSize = v, AutoAt: 0),
+        new("Settings icon from edge, X", Kind.Slider, -1, 120, "px", c => c.GearOffsetX, (c, v) => c.GearOffsetX = v, AutoAt: -1),
+        new("Settings icon from edge, Y", Kind.Slider, -1, 120, "px", c => c.GearOffsetY, (c, v) => c.GearOffsetY = v, AutoAt: -1),
     };
 
     // closed-box spacing presets: (name, padding, gap). Padding is never smaller than the gap, so icons never sit
@@ -58,7 +63,7 @@ internal sealed unsafe class SettingsWindow
     private static bool _classRegistered;
 
     private readonly Widget _w;
-    private nint _hwnd, _font, _presetCombo, _gearCombo, _snapCheck, _labelsCheck, _keepOpenCheck, _startupCheck;
+    private nint _hwnd, _font, _presetCombo, _gearCombo, _snapCheck, _labelsCheck, _keepOpenCheck, _startupCheck, _imageName;
     private float _s = 1f;
     private readonly Def[] _all;
     private readonly nint[] _tracks, _values;
@@ -127,6 +132,11 @@ internal sealed unsafe class SettingsWindow
         for (int i = 0; i < Layouts.Length; i++) AddRow(Look.Length + i, RightX, 40 + i * RowH);
 
         int leftBelow = 40 + Look.Length * RowH, rightBelow = 40 + Layouts.Length * RowH;
+        Ctl("STATIC", "Background image", 0, LeftX, leftBelow + 6, 128, 20, 0);
+        Ctl("BUTTON", "Choose...", 0x10000, LeftX + 132, leftBelow, 100, 28, IdImgChoose);
+        Ctl("BUTTON", "Remove", 0x10000, LeftX + 240, leftBelow, 80, 28, IdImgClear);
+        _imageName = Ctl("STATIC", "", 0x4000 /* SS_ENDELLIPSIS */, LeftX + 132, leftBelow + 34, 220, 20, 0);
+        leftBelow += 62;
         _snapCheck = Ctl("BUTTON", "Snap to the desktop grid", 0x3 /* BS_AUTOCHECKBOX */ | 0x10000, LeftX, leftBelow + 4, 340, 24, IdSnap);
         _labelsCheck = Ctl("BUTTON", "Show names when expanded", 0x3 | 0x10000, LeftX, leftBelow + 34, 340, 24, IdLabels);
         _keepOpenCheck = Ctl("BUTTON", "Stay open when clicking away (for editing)", 0x3 | 0x10000, LeftX, leftBelow + 64, 360, 24, IdKeepOpen);
@@ -173,11 +183,12 @@ internal sealed unsafe class SettingsWindow
             return;
         }
         _tracks[index] = Ctl("msctls_trackbar32", "", 0x10 /* TBS_NOTICKS */ | 0x10000, x + 128, y, 170, 28, IdBase + index);
-        Native.SendMessage(_tracks[index], 0x406 /* TBM_SETRANGE */, 1, (nint)((d.Max << 16) | (d.Min & 0xFFFF)));
+        Native.SendMessage(_tracks[index], 0x407 /* TBM_SETRANGEMIN */, 0, d.Min);
+        Native.SendMessage(_tracks[index], 0x408 /* TBM_SETRANGEMAX */, 0, d.Max);
         _values[index] = Ctl("STATIC", "", 0x2 /* SS_RIGHT */, x + 300, y + 4, 52, 20, 0);
     }
 
-    private static string ValueText(Def d, int v) => d.AutoAtZero && v == 0 ? "auto" : v + d.Unit;
+    private static string ValueText(Def d, int v) => d.AutoAt == v ? "auto" : v + d.Unit;
 
     /// <summary>Pushes the current config into every control.</summary>
     private void Sync()
@@ -194,6 +205,7 @@ internal sealed unsafe class SettingsWindow
         Native.SendMessage(_labelsCheck, 0xF1, cfg.ShowLabels ? 1 : 0, 0);
         Native.SendMessage(_keepOpenCheck, 0xF1, cfg.KeepOpen ? 1 : 0, 0);
         Native.SendMessage(_startupCheck, 0xF1, Native.StartsWithWindows() ? 1 : 0, 0);
+        Native.SetWindowText(_imageName, cfg.BackgroundImage.Length == 0 ? "(none)" : System.IO.Path.GetFileName(cfg.BackgroundImage));
 
         int preset = -1;
         for (int i = 0; i < Presets.Length; i++)
@@ -226,6 +238,27 @@ internal sealed unsafe class SettingsWindow
         uint argb = FromColorRef(cc.rgbResult, cur >> 24);
         if (tint) cfg.Tint = Config.ColorText(argb); else cfg.OutlineColor = Config.ColorText(argb);
         Native.InvalidateRect(Native.GetDlgItem(_hwnd, controlId), 0, 1);
+        _w.LookChanged(false);
+    }
+
+    private void ChooseImage()
+    {
+        // "Images\0*.png;...\0All files\0*.*\0\0": the dialog wants NUL-separated, double-NUL-terminated text
+        const string filter = "Images\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0All files\0*.*\0\0";
+        char* file = stackalloc char[1024];
+        for (int i = 0; i < 1024; i++) file[i] = '\0';
+        fixed (char* f = filter)
+        {
+            var ofn = new OPENFILENAME
+            {
+                lStructSize = (uint)sizeof(OPENFILENAME), hwndOwner = _hwnd, lpstrFilter = f, nFilterIndex = 1,
+                lpstrFile = file, nMaxFile = 1024,
+                Flags = 0x1000 | 0x800 | 0x80000 | 0x8, // FILEMUSTEXIST | PATHMUSTEXIST | EXPLORER | NOCHANGEDIR
+            };
+            if (Native.GetOpenFileName(ref ofn) == 0) return;
+        }
+        _w.Cfg.BackgroundImage = new string(file);
+        Sync();
         _w.LookChanged(false);
     }
 
@@ -274,6 +307,8 @@ internal sealed unsafe class SettingsWindow
                     _w.LookChanged(false);
                     _w.SettingsOpened(); // turning it on opens the cluster so there is something to look at
                 }
+                else if (id == IdImgChoose) { ChooseImage(); }
+                else if (id == IdImgClear) { cfg.BackgroundImage = ""; Sync(); _w.LookChanged(false); }
                 else if (id == IdStartup) Native.SetStartsWithWindows(Native.SendMessage(_startupCheck, 0xF0, 0, 0) == 1);
                 else if (id == IdReset)
                 {

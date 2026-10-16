@@ -57,6 +57,7 @@ internal sealed unsafe class Widget
     private FileSystemWatcher? _watcher;
     private long _lastSave;
     private Backdrop? _backdrop;
+    private BackgroundImage? _bgImage;
     private RECT _monitor;
 
     // geometry, physical pixels. _u scales every authored pixel value (DPI x cluster size).
@@ -97,6 +98,7 @@ internal sealed unsafe class Widget
         LoadSlots();
         ApplyStyle();
         Recompute();
+        ApplyBackgroundImage();
         Frame();
         Native.ShowWindow(_hwnd, 4 /* SW_SHOWNOACTIVATE */);
         SendToBottom();
@@ -111,6 +113,7 @@ internal sealed unsafe class Widget
         FreeCanvas();
         FreeStyle();
         _backdrop?.Dispose();
+        _bgImage?.Dispose();
         Gdip.GdiplusShutdown(_gdipToken);
     }
 
@@ -214,7 +217,17 @@ internal sealed unsafe class Widget
         ApplyStyle();
         Recompute();
         RebuildBackdrop();
+        ApplyBackgroundImage();
         Frame();
+    }
+
+    /// <summary>Loads (or drops) the background picture to match the config; only reloads the file when its path changed.</summary>
+    private void ApplyBackgroundImage()
+    {
+        string path = _cfg.BackgroundImage ?? "";
+        if (_bgImage != null && _bgImage.Path == path) { _bgImage.SetOpacity(_cfg.Opacity / 100f); return; }
+        _bgImage?.Dispose();
+        _bgImage = path.Length == 0 ? null : BackgroundImage.Load(path, _cfg.Opacity / 100f);
     }
 
     private void SaveConfig()
@@ -229,6 +242,7 @@ internal sealed unsafe class Widget
         ApplyStyle();
         Recompute();
         _backdrop?.SetOpacity(_cfg.Opacity / 100f);
+        ApplyBackgroundImage();
         if (blurChanged) Native.SetTimer(_hwnd, TimerBackdrop, 70, 0); // sliders fire fast: rebuild once they settle
         Frame();
         Native.SetTimer(_hwnd, TimerSave, 500, 0);
@@ -291,26 +305,12 @@ internal sealed unsafe class Widget
         _gapO = _cfg.OpenGap * _u; _padO = _cfg.OpenPadding * _u;
         int gap = (int)(_cfg.Gap * _scale);
         int n = _slots.Count;
-        _ke = Math.Clamp(n, 1, _cfg.ClosedCount);
 
-        // Closed box. Auto: it is exactly as big as icons + padding + spacing, so those sliders mean what they say.
-        // Fixed (width and height in desktop cells): icons keep their size and are arranged to suit the box's shape;
-        // they only shrink when they cannot all fit.
-        bool fixedBox = _cfg.BoxCols > 0 && _cfg.BoxRows > 0;
-        float boxW = 0, boxH = 0;
-        int s = _baseIcon, capC = int.MaxValue, capR = int.MaxValue;
-        if (fixedBox)
-        {
-            boxW = _cfg.BoxCols * _cw - 2 * gap; boxH = _cfg.BoxRows * _ch - 2 * gap;
-            while (true)
-            {
-                capC = Math.Max(0, (int)((boxW - 2 * _padC + _gapC) / (s + _gapC)));
-                capR = Math.Max(0, (int)((boxH - 2 * _padC + _gapC) / (s + _gapC)));
-                if ((capC >= 1 && capR >= 1 && capC * capR >= _ke) || s <= 16) break;
-                s = Math.Max(16, (int)(s * 0.92f));
-            }
-            capC = Math.Max(1, capC); capR = Math.Max(1, capR);
-        }
+        // Closed box: exactly the icon grid plus the padding on every side. Icons never shrink; padding and spacing
+        // resize the box. Columns x Rows (both set) is the grid of icon slots; otherwise it is as square as the count allows.
+        bool gridSet = _cfg.BoxCols > 0 && _cfg.BoxRows > 0;
+        _ke = Math.Clamp(n, 1, gridSet ? _cfg.BoxCols * _cfg.BoxRows : _cfg.ClosedCount);
+        int s = _baseIcon;
         if (s != _iconPx)
         {
             _iconPx = s;
@@ -323,13 +323,7 @@ internal sealed unsafe class Widget
         _tileW = Math.Max((int)(s * 1.45f), (int)(s + 12 * _u));
         _tileH = (int)(s + labelH);
 
-        if (fixedBox)
-        {
-            int maxCols = Math.Min(capC, _ke);
-            _ccols = Math.Clamp((int)Math.Round(Math.Sqrt(_ke * (double)boxW / boxH)), 1, maxCols);
-            _crows = (_ke + _ccols - 1) / _ccols;
-            while (_crows > capR && _ccols < maxCols) { _ccols++; _crows = (_ke + _ccols - 1) / _ccols; }
-        }
+        if (gridSet) { _ccols = _cfg.BoxCols; _crows = _cfg.BoxRows; }
         else
         {
             _ccols = (int)Math.Ceiling(Math.Sqrt(_ke));
@@ -337,7 +331,7 @@ internal sealed unsafe class Widget
         }
         _w0 = _ccols * s + (_ccols - 1) * _gapC + 2 * _padC;
         _h0 = _crows * s + (_crows - 1) * _gapC + 2 * _padC;
-        if (!fixedBox) { boxW = _w0; boxH = _h0; }
+        float boxW = _w0, boxH = _h0;
         int bw = (int)Math.Ceiling(boxW), bh = (int)Math.Ceiling(boxH);
 
         // which monitor are we on?
@@ -386,50 +380,53 @@ internal sealed unsafe class Widget
     // ---------------------------------------------------------------- settings icon placement
 
     private int _gearCorner;           // 0 top-right, 1 top-left, 2 bottom-right, 3 bottom-left
-    private float _gearSz, _gearMargin;
+    private float _gearSz, _gearMx, _gearMy;
 
-    private static (float X, float Y) CornerPos(float left, float top, float right, float bottom, int corner, float size, float margin) => corner switch
+    private static (float X, float Y) CornerPos(float left, float top, float right, float bottom, int corner, float size, float mx, float my) => corner switch
     {
-        0 => (right - margin - size, top + margin),
-        1 => (left + margin, top + margin),
-        2 => (right - margin - size, bottom - margin - size),
-        _ => (left + margin, bottom - margin - size),
+        0 => (right - mx - size, top + my),
+        1 => (left + mx, top + my),
+        2 => (right - mx - size, bottom - my - size),
+        _ => (left + mx, bottom - my - size),
     };
 
     /// <summary>
-    /// Picks the settings icon's corner and size. Manual: what the user chose. Auto: it scales with the icons, and
-    /// takes the first corner (top-right first) where it clears every icon in both the closed and expanded layouts,
-    /// shrinking a little if the padding is tight.
+    /// Picks the settings icon's corner, size and distance from the box edge. Manual values win. Automatic: it scales
+    /// with the icons and takes the first corner (top-right first) where it clears every icon in both the closed and
+    /// expanded layouts, shrinking a little if the padding is tight.
     /// </summary>
     private void ChooseGear()
     {
         string c = _cfg.GearCorner.ToLowerInvariant();
         int forced = c switch { "topright" => 0, "topleft" => 1, "bottomright" => 2, "bottomleft" => 3, _ => -1 };
         float full = _cfg.GearSize > 0 ? _cfg.GearSize * _u : Math.Clamp(_iconPx * 0.27f, 10 * _u, 26 * _u);
-        if (forced >= 0) { _gearCorner = forced; _gearSz = full; _gearMargin = Math.Max(4 * _u, full * 0.4f); return; }
+        float OffX(float sz) => _cfg.GearOffsetX >= 0 ? _cfg.GearOffsetX * _u : Math.Max(3 * _u, sz * 0.4f);
+        float OffY(float sz) => _cfg.GearOffsetY >= 0 ? _cfg.GearOffsetY * _u : Math.Max(3 * _u, sz * 0.4f);
+        if (forced >= 0) { _gearCorner = forced; _gearSz = full; _gearMx = OffX(full); _gearMy = OffY(full); return; }
 
         foreach (float k in new[] { 1f, 0.8f, 0.65f })
         {
-            float sz = Math.Max(8 * _u, full * k), m = Math.Max(3 * _u, sz * 0.4f);
+            float sz = Math.Max(8 * _u, full * k);
             for (int corner = 0; corner < 4; corner++)
-                if (GearClear(corner, sz, m)) { _gearCorner = corner; _gearSz = sz; _gearMargin = m; return; }
+                if (GearClear(corner, sz, OffX(sz), OffY(sz))) { _gearCorner = corner; _gearSz = sz; _gearMx = OffX(sz); _gearMy = OffY(sz); return; }
         }
-        _gearCorner = 0; _gearSz = Math.Max(8 * _u, full * 0.65f); _gearMargin = Math.Max(3 * _u, _gearSz * 0.4f);
+        float last = Math.Max(8 * _u, full * 0.65f);
+        _gearCorner = 0; _gearSz = last; _gearMx = OffX(last); _gearMy = OffY(last);
     }
 
-    private bool GearClear(int corner, float sz, float m)
+    private bool GearClear(int corner, float sz, float mx, float my)
     {
         float pad = 1.5f * _u;
         // closed: the gear sits on the closed rect; the icons are the closed slots
         float cl = _pa.Left - _pe.Left, ct = _pa.Top - _pe.Top, cr = _pa.Right - _pe.Left, cb = _pa.Bottom - _pe.Top;
-        var g = CornerPos(cl, ct, cr, cb, corner, sz, m);
+        var g = CornerPos(cl, ct, cr, cb, corner, sz, mx, my);
         for (int i = 0; i < _ke; i++)
         {
             var r = TileRect(i, 0f);
             if (Hit(g.X - pad, g.Y - pad, sz + 2 * pad, sz + 2 * pad, r.X, r.Y, r.W, r.H)) return false;
         }
         // expanded: the gear sits on the expanded rect; the tiles are all shown items
-        g = CornerPos(0, 0, _pe.Right - _pe.Left, _pe.Bottom - _pe.Top, corner, sz, m);
+        g = CornerPos(0, 0, _pe.Right - _pe.Left, _pe.Bottom - _pe.Top, corner, sz, mx, my);
         int shown = Math.Min(_slots.Count, _ecols * _erows);
         for (int i = 0; i < shown; i++)
         {
@@ -438,7 +435,6 @@ internal sealed unsafe class Widget
         }
         return true;
     }
-
     private static bool Hit(float ax, float ay, float aw, float ah, float bx, float by, float bw, float bh)
         => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 
@@ -499,7 +495,7 @@ internal sealed unsafe class Widget
     private (float X, float Y, float S) GearRect()
     {
         RECT cur = Current();
-        var p = CornerPos(cur.Left - _pe.Left, cur.Top - _pe.Top, cur.Right - _pe.Left, cur.Bottom - _pe.Top, _gearCorner, _gearSz, _gearMargin);
+        var p = CornerPos(cur.Left - _pe.Left, cur.Top - _pe.Top, cur.Right - _pe.Left, cur.Bottom - _pe.Top, _gearCorner, _gearSz, _gearMx, _gearMy);
         return (p.X, p.Y, _gearSz);
     }
 
@@ -631,7 +627,14 @@ internal sealed unsafe class Widget
 
         // background: blurred wallpaper, then the tint on top
         nint bg = RoundRect(cx, cy, cwid, chei, radius);
-        if (_backdrop != null)
+        if (_bgImage != null)
+        {
+            _bgImage.Place(cx, cy, cwid, chei, _cfg.ImageZoom / 100f, _cfg.ImagePanX / 100f, _cfg.ImagePanY / 100f);
+            Gdip.GdipSetInterpolationMode(_g, 6);
+            Gdip.GdipFillPath(_g, _bgImage.Brush, bg);
+            Gdip.GdipSetInterpolationMode(_g, 7);
+        }
+        else if (_backdrop != null)
         {
             _backdrop.Place(_pe.Left, _pe.Top);
             Gdip.GdipSetInterpolationMode(_g, 6);
