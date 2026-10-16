@@ -179,6 +179,9 @@ internal static unsafe partial class Gdip
     [LibraryImport("gdiplus.dll")] public static partial int GdipCreateHICONFromBitmap(nint bmp, out nint icon);
     [LibraryImport("gdiplus.dll")] public static partial int GdipSetClipRectI(nint g, int x, int y, int w, int h, int mode);
     [LibraryImport("gdiplus.dll")] public static partial int GdipResetClip(nint g);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipCreateFromHDC(nint hdc, out nint g);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipFillPie(nint g, nint brush, float x, float y, float w, float h, float start, float sweep);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipFillEllipse(nint g, nint brush, float x, float y, float w, float h);
     [LibraryImport("gdiplus.dll")] public static partial int GdipFillRectangle(nint g, nint brush, float x, float y, float w, float h);
     [LibraryImport("gdiplus.dll")] public static partial int GdipGetImageWidth(nint img, out uint w);
     [LibraryImport("gdiplus.dll")] public static partial int GdipGetImageHeight(nint img, out uint h);

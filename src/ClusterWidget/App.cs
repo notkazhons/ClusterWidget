@@ -58,7 +58,7 @@ internal static unsafe class App
         {
             string first = Path.Combine(Config.ClustersDir, "cluster-1.json");
             if (File.Exists(Config.LegacyFile)) File.Copy(Config.LegacyFile, first); // keep the old file untouched
-            else new Config { SourcePath = first }.Save();
+            else { var c0 = Config.NewDefault(); c0.SourcePath = first; c0.Name = "Cluster 1"; c0.Save(); }
         }
         foreach (string file in Directory.GetFiles(Config.ClustersDir, "*.json").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
             AddWidgetFromFile(file);
@@ -81,7 +81,8 @@ internal static unsafe class App
         Directory.CreateDirectory(Config.ClustersDir);
         int n = 1;
         while (File.Exists(Path.Combine(Config.ClustersDir, $"cluster-{n}.json"))) n++;
-        var cfg = new Config { SourcePath = Path.Combine(Config.ClustersDir, $"cluster-{n}.json") };
+        var cfg = Config.NewDefault();
+        cfg.SourcePath = Path.Combine(Config.ClustersDir, $"cluster-{n}.json");
         string name; int k = n;
         do { name = $"Cluster {k++}"; } while (Widgets.Any(w => w.Cfg.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
         cfg.Name = name;

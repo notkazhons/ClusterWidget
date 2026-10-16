@@ -28,7 +28,7 @@ internal sealed unsafe class SettingsWindow
         IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdAutoGrid = 304, IdStartup = 305, IdGear = 306,
         IdImgChoose = 307, IdImgClear = 308, IdGearAlways = 309, IdPreview = 311, IdGearPreview = 312,
         IdClusterPreview = 315, IdExpandFrom = 316, IdSortAz = 317, IdSortZa = 318, IdReverse = 319, IdClickLaunches = 320,
-        IdOpenFolder = 321, IdOpenFile = 322, IdBase = 1000;
+        IdOpenFolder = 321, IdOpenFile = 322, IdSetDefault = 323, IdClearDefault = 324, IdBase = 1000;
 
     private static readonly Def[] Defs =
     {
@@ -108,11 +108,12 @@ internal sealed unsafe class SettingsWindow
     private Widget _w;
     private nint _hwnd, _font, _boldFont, _iconFont, _tab, _tip, _clusterCombo, _designCombo, _presetCombo, _gearCombo, _expandFromCombo,
         _snapCheck, _labelsCheck, _autoGridCheck, _clusterPreviewCheck, _clickLaunchCheck, _startupCheck, _gearAlwaysCheck,
-        _imageName, _previewToggle, _gearToggle, _applyBtn, _cancelBtn, _status, _pageBrush;
+        _imageName, _lookNote, _previewToggle, _gearToggle, _applyBtn, _cancelBtn, _status, _pageBrush;
     private float _s = 1f;
     private readonly List<nint>[] _pages = Enumerable.Range(0, PageNames.Length).Select(_ => new List<nint>()).ToArray();
     private readonly int[] _pageY = new int[PageNames.Length];
-    private readonly nint[] _tracks = new nint[Defs.Length], _values = new nint[Defs.Length];
+    private readonly nint[] _tracks = new nint[Defs.Length], _values = new nint[Defs.Length], _defLabels = new nint[Defs.Length];
+    private bool _lookDimmed;                       // the first half of Look is covered by a picture
     private readonly HashSet<nint> _labels = new(), _hints = new(), _captions = new();
     private readonly List<nint> _tipTexts = new();
     private readonly Dictionary<Widget, Config> _snaps = new();   // each edited cluster as it was when last applied (for Cancel)
@@ -333,10 +334,10 @@ internal sealed unsafe class SettingsWindow
             if (Defs[i].Page != page) continue;
             var d = Defs[i];
             int y = NextY(page);
-            Ctl(page, "STATIC", d.Label, 0, PageX, y + 4, LabelW, 20, 0, d.Tip);
+            _defLabels[i] = Ctl(page, "STATIC", d.Label, 0, PageX, y + 4, LabelW, 20, 0, d.Tip);
             if (d.Kind != Kind.Slider)
             {
-                Ctl(page, "BUTTON", "", 0xB /* BS_OWNERDRAW */ | 0x10000, TrackX - 4, y, 80, 28, IdBase + i, d.Tip);
+                Ctl(page, "BUTTON", "", 0xB /* BS_OWNERDRAW */ | 0x10000, TrackX - 4, y, 100, 28, IdBase + i, d.Tip);
                 continue;
             }
             _tracks[i] = Ctl(page, "msctls_trackbar32", "", 0x10 /* TBS_NOTICKS */ | 0x10000, TrackX, y, TrackW, 28, IdBase + i, d.Tip);
@@ -362,7 +363,35 @@ internal sealed unsafe class SettingsWindow
 
     // ---- pages
 
-    private void BuildLook() => AddDefs(PLook);
+    private void BuildLook()
+    {
+        int y = NextY(PLook, 44);
+        _lookNote = Ctl(PLook, "STATIC", "", 0, PageX - 8, y, 490, 38, 0);
+        _labels.Remove(_lookNote);
+        AddDefs(PLook);
+    }
+
+    /// <summary>The first four Look settings (blur, opacity, tint strength, tint color) paint the box underneath a picture.</summary>
+    private static bool UnderPicture(Def d) => d.Page == PLook && d.Label is "Blur" or "Opacity" or "Tint strength" or "Tint color";
+
+    /// <summary>Greys those settings out while a fully opaque picture hides them, and says why.</summary>
+    private void UpdateLookDim()
+    {
+        var cfg = _w.Cfg;
+        bool dim = cfg.BackgroundImage.Length > 0 && cfg.ImageOpacity >= 100;
+        _lookDimmed = dim;
+        for (int i = 0; i < Defs.Length; i++)
+        {
+            if (!UnderPicture(Defs[i])) continue;
+            int on = dim ? 0 : 1;
+            if (_tracks[i] != 0) { Native.EnableWindow(_tracks[i], on); Native.EnableWindow(_values[i], on); }
+            else Native.EnableWindow(Native.GetDlgItem(_hwnd, IdBase + i), on);
+            Native.InvalidateRect(_defLabels[i], 0, 1);
+            if (_values[i] != 0) Native.InvalidateRect(_values[i], 0, 1);
+        }
+        Native.SetWindowText(_lookNote, dim ? "Greyed out: your picture covers the box, so blur, opacity and tint can't be seen. Lower the picture's opacity or remove the picture (Picture tab) to use them." : "");
+        Native.InvalidateRect(_lookNote, 0, 1);
+    }
 
     private void BuildPicture()
     {
@@ -423,8 +452,13 @@ internal sealed unsafe class SettingsWindow
         Section(PBehavior, "System");
         _startupCheck = Check(PBehavior, "Start with Windows (all clusters)", IdStartup, "Start ClusterWidget when you sign in to Windows.");
         int y = NextY(PBehavior, 40);
+        Ctl(PBehavior, "BUTTON", "Use this look as my default", 0x10000, PageX, y + 2, 250, 30, IdSetDefault,
+            "Save this cluster's look and layout (including its picture) as the default: new clusters start with it, and Reset returns to it.");
+        Ctl(PBehavior, "BUTTON", "Go back to the built-in default", 0x10000, PageX + 258, y + 2, 230, 30, IdClearDefault,
+            "Forget your saved default look, so new clusters and Reset use the built-in look again.");
+        y = NextY(PBehavior, 40);
         Ctl(PBehavior, "BUTTON", "Reset this cluster's look and layout", 0x10000, PageX, y + 2, 250, 30, IdReset,
-            "Put this cluster's look and layout back to the defaults. Its icons, position and name stay.");
+            "Put this cluster's look and layout back to your default look. Its icons, position and name stay.");
     }
 
     private void BuildAbout()
@@ -472,6 +506,7 @@ internal sealed unsafe class SettingsWindow
         Native.SendMessage(_clusterPreviewCheck, 0xF1, cfg.ClusterPreview ? 1 : 0, 0);
         Native.SendMessage(_clickLaunchCheck, 0xF1, cfg.ClickLaunches ? 1 : 0, 0);
         UpdateEnabled(autoGrid);
+        UpdateLookDim();
         Native.SendMessage(_gearAlwaysCheck, 0xF1, cfg.GearAlways ? 1 : 0, 0);
         Native.SendMessage(_startupCheck, 0xF1, Native.StartsWithWindows() ? 1 : 0, 0);
         Native.SetWindowText(_imageName, cfg.BackgroundImage.Length == 0 ? "(no picture)" : System.IO.Path.GetFileName(cfg.BackgroundImage));
@@ -626,6 +661,55 @@ internal sealed unsafe class SettingsWindow
         _w.LookChanged(false);
     }
 
+    private static uint Fade(uint colorRef) // blend towards the page colour: a disabled swatch
+    {
+        uint r = colorRef & 0xFF, g = (colorRef >> 8) & 0xFF, b = (colorRef >> 16) & 0xFF;
+        r = (r + 0xFB * 3) / 4; g = (g + 0xFB * 3) / 4; b = (b + 0xFB * 3) / 4;
+        return r | (g << 8) | (b << 16);
+    }
+
+    private static uint Hue(float h, bool dim)
+    {
+        float x = 1 - MathF.Abs(h / 60f % 2 - 1);
+        (float r, float g, float b) = (int)(h / 60f) switch { 0 => (1f, x, 0f), 1 => (x, 1f, 0f), 2 => (0f, 1f, x), 3 => (0f, x, 1f), 4 => (x, 0f, 1f), _ => (1f, 0f, x) };
+        uint argb = 0xFF000000 | ((uint)(r * 255) << 16) | ((uint)(g * 255) << 8) | (uint)(b * 255);
+        if (dim) argb = (argb & 0x00FFFFFF) | 0x50000000;
+        return argb;
+    }
+
+    private void DrawSwatch(DRAWITEMSTRUCT* di, uint argb, bool disabled)
+    {
+        RECT rc = di->rcItem;
+        int h = rc.Bottom - rc.Top, wheelW = h;
+        var colorRc = new RECT { Left = rc.Left, Top = rc.Top, Right = rc.Right - wheelW, Bottom = rc.Bottom };
+        var wheelRc = new RECT { Left = rc.Right - wheelW, Top = rc.Top, Right = rc.Right, Bottom = rc.Bottom };
+        uint cref = ColorRef(argb);
+        nint fill = Native.CreateSolidBrush(disabled ? Fade(cref) : cref);
+        nint wheelBg = Native.CreateSolidBrush((di->itemState & 0x1 /* ODS_SELECTED */) != 0 ? 0xDDDDDDu : 0xF3F3F3u);
+        nint edge = Native.CreateSolidBrush(disabled ? 0xC8C8C8u : 0x808080u);
+        Native.FillRect(di->hDC, colorRc, fill);
+        Native.FillRect(di->hDC, wheelRc, wheelBg);
+        Native.FrameRect(di->hDC, rc, edge);
+        Native.FrameRect(di->hDC, colorRc, edge);
+        Native.DeleteObject(fill); Native.DeleteObject(wheelBg); Native.DeleteObject(edge);
+
+        // the wheel: twelve hue slices with a light hub
+        if (Gdip.GdipCreateFromHDC(di->hDC, out nint g) != 0 || g == 0) return;
+        Gdip.GdipSetSmoothingMode(g, 4);
+        float d = h - 10 * _s / 1.25f, cx = wheelRc.Left + wheelW / 2f, cy = wheelRc.Top + h / 2f;
+        d = MathF.Max(8, h - 10);
+        for (int k = 0; k < 12; k++)
+        {
+            Gdip.GdipCreateSolidFill(Hue(k * 30f, disabled), out nint br);
+            Gdip.GdipFillPie(g, br, cx - d / 2, cy - d / 2, d, d, k * 30f - 90f, 30.5f);
+            Gdip.GdipDeleteBrush(br);
+        }
+        Gdip.GdipCreateSolidFill(disabled ? 0x50FFFFFFu : 0xFFFFFFFFu, out nint hub);
+        Gdip.GdipFillEllipse(g, hub, cx - d * 0.2f, cy - d * 0.2f, d * 0.4f, d * 0.4f);
+        Gdip.GdipDeleteBrush(hub);
+        Gdip.GdipDeleteGraphics(g);
+    }
+
     private void ChooseImage()
     {
         // "Images\0*.png;...\0All files\0*.*\0\0": the dialog wants NUL-separated, double-NUL-terminated text
@@ -642,7 +726,7 @@ internal sealed unsafe class SettingsWindow
             };
             if (Native.GetOpenFileName(ref ofn) == 0) return;
         }
-        _w.Cfg.BackgroundImage = new string(file);
+        _w.Cfg.BackgroundImage = Config.KeepPicture(new string(file)); // a copy in the app folder, so moving the original is harmless
         Sync();
         _w.LookChanged(false);
     }
@@ -686,13 +770,32 @@ internal sealed unsafe class SettingsWindow
         switch (msg)
         {
             case 0x138: // WM_CTLCOLORSTATIC: labels sit on the tab page without their own grey box; hints and captions get their own colour
-                if (lp == _status || lp == _imageName)
+                if (lp == _status || lp == _imageName || lp == _lookNote)
                 {
                     // text that changes must repaint its background, or old and new text pile up
                     if (_pageBrush == 0) _pageBrush = Native.CreateSolidBrush(0xFBFBFB);
                     Native.SetBkColor(wp, 0xFBFBFB);
-                    Native.SetTextColor(wp, 0x707070);
+                    Native.SetTextColor(wp, lp == _lookNote ? 0x2020B0u /* a warm red, BGR */ : 0x707070u);
                     return _pageBrush;
+                }
+                for (int i = 0; i < Defs.Length; i++)
+                    if (_defLabels[i] == lp && UnderPicture(Defs[i]))
+                    {
+                        if (_pageBrush == 0) _pageBrush = Native.CreateSolidBrush(0xFBFBFB);
+                        Native.SetBkColor(wp, 0xFBFBFB);
+                        Native.SetTextColor(wp, _lookDimmed ? 0xA8A8A8u : 0x000000u);
+                        return _pageBrush;
+                    }
+                if (_values.Contains(lp))
+                {
+                    for (int i = 0; i < Defs.Length; i++)
+                        if (_values[i] == lp && UnderPicture(Defs[i]))
+                        {
+                            if (_pageBrush == 0) _pageBrush = Native.CreateSolidBrush(0xFBFBFB);
+                            Native.SetBkColor(wp, 0xFBFBFB);
+                            Native.SetTextColor(wp, _lookDimmed ? 0xA8A8A8u : 0x000000u);
+                            return _pageBrush;
+                        }
                 }
                 if (_labels.Contains(lp) || _hints.Contains(lp) || _captions.Contains(lp))
                 {
@@ -731,19 +834,14 @@ internal sealed unsafe class SettingsWindow
                 if (_open != null) UpdateDirty();
                 return 0;
 
-            case 0x2B: // WM_DRAWITEM: the color swatch buttons
+            case 0x2B: // WM_DRAWITEM: a color swatch with a colour wheel beside it, so it reads as clickable
             {
                 var di = (DRAWITEMSTRUCT*)lp;
                 int index = (int)di->CtlID - IdBase;
                 if (index < 0 || index >= Defs.Length) break;
-                uint argb = ColorOf(Defs[index].Kind);
-                nint fill = Native.CreateSolidBrush(ColorRef(argb)), edge = Native.CreateSolidBrush(0x808080);
-                Native.FillRect(di->hDC, di->rcItem, fill);
-                Native.FrameRect(di->hDC, di->rcItem, edge);
-                Native.DeleteObject(fill); Native.DeleteObject(edge);
+                DrawSwatch(di, ColorOf(Defs[index].Kind), (di->itemState & 0x4 /* ODS_DISABLED */) != 0);
                 return 1;
             }
-
             case 0x10: // WM_CLOSE: the window's X works like Cancel
                 Cancel();
                 return 0;
@@ -842,11 +940,21 @@ internal sealed unsafe class SettingsWindow
             case IdStartup: Native.SetStartsWithWindows(Native.SendMessage(_startupCheck, 0xF0, 0, 0) == 1); break;
             case IdReset:
                 // MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2: "No" is the default so Enter cannot reset by accident
-                if (Native.MessageBox(_hwnd, $"Reset the look and layout of \"{cfg.Name}\" to the defaults?\n\nIts icons and position are kept. Saved designs are not touched.",
+                if (Native.MessageBox(_hwnd, $"Reset the look and layout of \"{cfg.Name}\" to your default look?\n\nIts icons and position are kept. Saved designs are not touched.",
                         "Reset settings", 0x4 | 0x20 | 0x100) == 6 /* IDYES */)
                 {
                     cfg.ResetLook(); Sync(); _w.LookChanged(true);
                 }
+                break;
+            case IdSetDefault:
+                if (Native.MessageBox(_hwnd, "Use this cluster's look and layout as the default for new clusters and for Reset?\n\nThe picture, if any, is copied into the app folder. Icons and position are not included.", "Use as default", 0x4 | 0x20) == 6)
+                {
+                    cfg.SaveAsDefault();
+                    Native.MessageBox(_hwnd, "Saved. New clusters will start with this look.", "Use as default", 0x40);
+                }
+                break;
+            case IdClearDefault:
+                if (Native.MessageBox(_hwnd, "Forget your saved default look and go back to the built-in one?\n\nExisting clusters are not changed.", "Built-in default", 0x4 | 0x20 | 0x100) == 6) Config.ClearDefault();
                 break;
             case IdOpenFolder: Native.ShellExecute(_hwnd, "open", Config.RootDir, null, null, 1); break;
             case IdOpenFile: Native.ShellExecute(_hwnd, "open", cfg.SourcePath, null, null, 1); break;

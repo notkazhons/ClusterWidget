@@ -135,6 +135,10 @@ internal sealed class Config
     public static string ClustersDir => System.IO.Path.Combine(RootDir, "clusters");
     public static string DesignsDir => System.IO.Path.Combine(RootDir, "designs");
     /// <summary>The single-cluster file of earlier versions; it becomes clusters\cluster-1.json on first start.</summary>
+    /// <summary>Optional user default: the look new clusters start with and "Reset" returns to. Written by the Behavior tab's "Use as default" button.</summary>
+    public static string DefaultDesignFile => System.IO.Path.Combine(RootDir, "default-design.json");
+    /// <summary>Pictures chosen as backgrounds are copied here, so moving or deleting the original does not blank a cluster.</summary>
+    public static string PicturesDir => System.IO.Path.Combine(RootDir, "pictures");
     public static string LegacyFile => System.IO.Path.Combine(RootDir, "config.json");
 
     // ---------------------------------------------------------------- load / save
@@ -180,8 +184,46 @@ internal sealed class Config
         Sanitize();
     }
 
-    /// <summary>Restores the design (not position, items or name) to the shipped defaults.</summary>
-    public void ResetLook() => ApplyDesign(new Config());
+    /// <summary>A new Config with the user's default look if one was saved, otherwise the built-in look. Never has items.</summary>
+    public static Config NewDefault()
+    {
+        var c = File.Exists(DefaultDesignFile) ? Load(DefaultDesignFile) : null;
+        c ??= new Config();
+        c.Items = new(); c.SourcePath = ""; c.Name = "Cluster";
+        return c;
+    }
+
+    /// <summary>Copies a picture into the app's pictures folder (once) and returns the copy's path; falls back to the original.</summary>
+    public static string KeepPicture(string path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return path;
+            if (path.StartsWith(PicturesDir, StringComparison.OrdinalIgnoreCase)) return path;
+            Directory.CreateDirectory(PicturesDir);
+            string name = System.IO.Path.GetFileNameWithoutExtension(path), ext = System.IO.Path.GetExtension(path);
+            string dst = System.IO.Path.Combine(PicturesDir, name + ext);
+            for (int n = 2; File.Exists(dst) && new FileInfo(dst).Length != new FileInfo(path).Length; n++) dst = System.IO.Path.Combine(PicturesDir, $"{name} ({n}){ext}");
+            if (!File.Exists(dst)) File.Copy(path, dst);
+            return dst;
+        }
+        catch (Exception) { return path; }
+    }
+
+    /// <summary>Saves this cluster's look as the default for new clusters and for Reset (items and position are not included).</summary>
+    public void SaveAsDefault()
+    {
+        var d = Clone();
+        d.Items = new();
+        d.BackgroundImage = KeepPicture(d.BackgroundImage);
+        Directory.CreateDirectory(RootDir);
+        File.WriteAllText(DefaultDesignFile, JsonSerializer.Serialize(d, ConfigJson.Default.Config));
+    }
+
+    public static void ClearDefault() { try { File.Delete(DefaultDesignFile); } catch (Exception) { /* already gone */ } }
+
+    /// <summary>Restores the design (not position, items or name) to the default look.</summary>
+    public void ResetLook() => ApplyDesign(NewDefault());
 
     private void Sanitize()
     {
