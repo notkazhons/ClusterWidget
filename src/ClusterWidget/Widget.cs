@@ -81,7 +81,7 @@ internal sealed unsafe class Widget
     private nint _memDc, _dib, _bmp, _g;
     private int _canvasW, _canvasH;
     private nint _fontFamily, _font, _strFmt, _brushHover, _gearFamily, _gearFont;
-    private float _fontEm;
+    private float _fontEm, _gearEm;
     private uint _outlineArgb, _hoverArgb, _labelArgb;
 
     public Widget(Config cfg) { _cfg = cfg; _self = this; }
@@ -234,6 +234,12 @@ internal sealed unsafe class Widget
         Native.SetTimer(_hwnd, TimerSave, 500, 0);
     }
 
+    /// <summary>Settings opened (or "stay open" switched on): with "stay open" the cluster expands so edits are visible.</summary>
+    public void SettingsOpened()
+    {
+        if (_cfg.KeepOpen && _target == 0 && _slots.Count > 0) Expand();
+    }
+
     /// <summary>Called after the snap option flipped: carry the current position over so the box does not jump.</summary>
     public void SnapToggled()
     {
@@ -264,93 +270,177 @@ internal sealed unsafe class Widget
     {
         uint dpi = Native.GetDpiForWindow(_hwnd);
         _scale = dpi == 0 ? 1f : dpi / 96f;
+        _u = _scale;
         (_cw, _ch) = DesktopGrid.CellSize();
         var primary = default(MONITORINFO); primary.cbSize = (uint)sizeof(MONITORINFO);
         Native.GetMonitorInfo(Native.MonitorFromPoint(default, 1), ref primary);
         _ox = primary.rcWork.Left; _oy = primary.rcWork.Top;
 
-        // Same size as the desktop icons (Explorer's own "icon size" setting, DPI scaled), times the user's multipliers.
-        _u = _scale * _cfg.BoxScale / 100f;
+        // Same size as the desktop icons (Explorer's own "icon size" setting, DPI scaled), times the user's multiplier.
         uint logical = Native.RegDword(@"Software\Microsoft\Windows\Shell\Bags\1\Desktop", "IconSize", out uint v) && v is >= 16 and <= 256 ? v : 48;
-        int px = Math.Max(16, (int)(logical * _u * _cfg.IconScale));
-        if (px != _iconPx)
-        {
-            _iconPx = px;
-            foreach (var s in _slots) { s.Image?.Dispose(); s.Image = null; s.Failed = false; s.Mini?.Dispose(); s.Mini = null; s.MiniFailed = false; }
-        }
-        _miniPx = Math.Max(8, (int)(px * 0.44f));
+        _baseIcon = Math.Max(16, (int)(logical * _u * _cfg.IconScale));
         Relayout();
     }
+
+    private int _baseIcon;
 
     /// <summary>Recomputes every size and rectangle from the config and the cached grid (cheap enough for each drag step).</summary>
     private void Relayout()
     {
         _gapC = _cfg.ClosedGap * _u; _padC = _cfg.ClosedPadding * _u;
         _gapO = _cfg.OpenGap * _u; _padO = _cfg.OpenPadding * _u;
-        float fontEm = MathF.Max(8f, _cfg.LabelSize * _u);
-        float labelH = _cfg.ShowLabels ? fontEm * 1.5f + 4 * _u : 0;
-        _tileW = Math.Max((int)(_iconPx * 1.45f), (int)(_iconPx + 12 * _u));
-        _tileH = (int)(_iconPx + labelH);
-
-        // closed grid: as square as the count allows
+        int gap = (int)(_cfg.Gap * _scale);
         int n = _slots.Count;
         _ke = Math.Clamp(n, 1, _cfg.ClosedCount);
-        _ccols = (int)Math.Ceiling(Math.Sqrt(_ke));
-        _crows = (_ke + _ccols - 1) / _ccols;
-        _w0 = _ccols * _iconPx + (_ccols - 1) * _gapC + 2 * _padC;
-        _h0 = _crows * _iconPx + (_crows - 1) * _gapC + 2 * _padC;
+
+        // Closed box. Auto: it is exactly as big as icons + padding + spacing, so those sliders mean what they say.
+        // Fixed (width and height in desktop cells): icons keep their size and are arranged to suit the box's shape;
+        // they only shrink when they cannot all fit.
+        bool fixedBox = _cfg.BoxCols > 0 && _cfg.BoxRows > 0;
+        float boxW = 0, boxH = 0;
+        int s = _baseIcon, capC = int.MaxValue, capR = int.MaxValue;
+        if (fixedBox)
+        {
+            boxW = _cfg.BoxCols * _cw - 2 * gap; boxH = _cfg.BoxRows * _ch - 2 * gap;
+            while (true)
+            {
+                capC = Math.Max(0, (int)((boxW - 2 * _padC + _gapC) / (s + _gapC)));
+                capR = Math.Max(0, (int)((boxH - 2 * _padC + _gapC) / (s + _gapC)));
+                if ((capC >= 1 && capR >= 1 && capC * capR >= _ke) || s <= 16) break;
+                s = Math.Max(16, (int)(s * 0.92f));
+            }
+            capC = Math.Max(1, capC); capR = Math.Max(1, capR);
+        }
+        if (s != _iconPx)
+        {
+            _iconPx = s;
+            foreach (var sl in _slots) { sl.Image?.Dispose(); sl.Image = null; sl.Failed = false; sl.Mini?.Dispose(); sl.Mini = null; sl.MiniFailed = false; }
+        }
+        _miniPx = Math.Max(8, (int)(s * 0.44f));
+
+        float fontEm = MathF.Max(8f, _cfg.LabelSize * _u);
+        float labelH = _cfg.ShowLabels ? fontEm * 1.5f + 4 * _u : 0;
+        _tileW = Math.Max((int)(s * 1.45f), (int)(s + 12 * _u));
+        _tileH = (int)(s + labelH);
+
+        if (fixedBox)
+        {
+            int maxCols = Math.Min(capC, _ke);
+            _ccols = Math.Clamp((int)Math.Round(Math.Sqrt(_ke * (double)boxW / boxH)), 1, maxCols);
+            _crows = (_ke + _ccols - 1) / _ccols;
+            while (_crows > capR && _ccols < maxCols) { _ccols++; _crows = (_ke + _ccols - 1) / _ccols; }
+        }
+        else
+        {
+            _ccols = (int)Math.Ceiling(Math.Sqrt(_ke));
+            _crows = (_ke + _ccols - 1) / _ccols;
+        }
+        _w0 = _ccols * s + (_ccols - 1) * _gapC + 2 * _padC;
+        _h0 = _crows * s + (_crows - 1) * _gapC + 2 * _padC;
+        if (!fixedBox) { boxW = _w0; boxH = _h0; }
+        int bw = (int)Math.Ceiling(boxW), bh = (int)Math.Ceiling(boxH);
 
         // which monitor are we on?
-        int gap = (int)(_cfg.Gap * _scale);
         POINT center = _cfg.Snap
-            ? new POINT { X = _ox + _cfg.X * _cw + (int)(_w0 / 2), Y = _oy + _cfg.Y * _ch + (int)(_h0 / 2) }
-            : new POINT { X = _cfg.FreeX + (int)(_w0 / 2), Y = _cfg.FreeY + (int)(_h0 / 2) };
+            ? new POINT { X = _ox + _cfg.X * _cw + bw / 2, Y = _oy + _cfg.Y * _ch + bh / 2 }
+            : new POINT { X = _cfg.FreeX + bw / 2, Y = _cfg.FreeY + bh / 2 };
         var mi = default(MONITORINFO); mi.cbSize = (uint)sizeof(MONITORINFO);
         Native.GetMonitorInfo(Native.MonitorFromPoint(center, 1), ref mi);
         _monitor = mi.rcMonitor;
         int workW = mi.rcWork.Right - mi.rcWork.Left, workH = mi.rcWork.Bottom - mi.rcWork.Top;
+        var bounds = new CellRect(mi.rcWork.Left, mi.rcWork.Top, workW, workH);
 
         // expanded grid: shaped like the tiles' pixel proportions, capped to the work area
         int pitchW = _tileW + (int)_gapO, pitchH = _tileH + (int)_gapO;
-        int maxCols = Math.Max(2, (int)((workW - 2 * _padO + _gapO) / pitchW));
-        int maxRows = Math.Max(2, (int)((workH - 2 * _padO + _gapO) / pitchH));
-        (_ecols, _erows) = Layout.TileGrid(n, maxCols, maxRows, pitchW, pitchH);
+        int maxC = Math.Max(2, (int)((workW - 2 * _padO + _gapO) / pitchW));
+        int maxR = Math.Max(2, (int)((workH - 2 * _padO + _gapO) / pitchH));
+        (_ecols, _erows) = Layout.TileGrid(n, maxC, maxR, pitchW, pitchH);
         _w1 = _ecols * _tileW + (_ecols - 1) * _gapO + 2 * _padO;
         _h1 = _erows * _tileH + (_erows - 1) * _gapO + 2 * _padO;
 
+        // Position. Snapping only decides where the top-left corner sits (on a desktop cell); the size stays exact.
+        CellRect closed;
         if (_cfg.Snap)
         {
-            // whole desktop cells: the box grows to the next cell boundary and the content stays centred
-            var bounds = new CellRect(
-                (int)Math.Ceiling((mi.rcWork.Left - _ox) / (double)_cw), (int)Math.Ceiling((mi.rcWork.Top - _oy) / (double)_ch),
-                0, 0);
-            bounds = bounds with
-            {
-                W = (int)Math.Floor((mi.rcWork.Right - _ox) / (double)_cw) - bounds.X,
-                H = (int)Math.Floor((mi.rcWork.Bottom - _oy) / (double)_ch) - bounds.Y,
-            };
-            int cellsW = Math.Max(1, (int)Math.Ceiling((_w0 + 2 * gap) / _cw)), cellsH = Math.Max(1, (int)Math.Ceiling((_h0 + 2 * gap) / _ch));
-            int ecellsW = Math.Max(cellsW, (int)Math.Ceiling((_w1 + 2 * gap) / _cw)), ecellsH = Math.Max(cellsH, (int)Math.Ceiling((_h1 + 2 * gap) / _ch));
-            bounds = bounds with { W = Math.Max(bounds.W, cellsW), H = Math.Max(bounds.H, cellsH) };
-            var anchor = Layout.Clamp(new CellRect(_cfg.X, _cfg.Y, cellsW, cellsH), bounds);
-            _cfg.X = anchor.X; _cfg.Y = anchor.Y;
-            _pa = PixelRect(anchor, gap);
-            _pe = PixelRect(Layout.Expand(anchor, ecellsW, ecellsH, bounds), gap);
+            int xmin = (int)Math.Ceiling((mi.rcWork.Left - _ox - gap) / (double)_cw), xmax = (int)Math.Floor((mi.rcWork.Right - _ox - gap - bw) / (double)_cw);
+            int ymin = (int)Math.Ceiling((mi.rcWork.Top - _oy - gap) / (double)_ch), ymax = (int)Math.Floor((mi.rcWork.Bottom - _oy - gap - bh) / (double)_ch);
+            _cfg.X = Math.Clamp(_cfg.X, xmin, Math.Max(xmin, xmax));
+            _cfg.Y = Math.Clamp(_cfg.Y, ymin, Math.Max(ymin, ymax));
+            closed = Layout.Clamp(new CellRect(_ox + _cfg.X * _cw + gap, _oy + _cfg.Y * _ch + gap, bw, bh), bounds);
         }
         else
         {
-            var bounds = new CellRect(mi.rcWork.Left, mi.rcWork.Top, workW, workH);
-            var free = Layout.Clamp(new CellRect(_cfg.FreeX, _cfg.FreeY, (int)Math.Ceiling(_w0), (int)Math.Ceiling(_h0)), bounds);
-            _cfg.FreeX = free.X; _cfg.FreeY = free.Y;
-            var open = Layout.Expand(free, (int)Math.Ceiling(_w1), (int)Math.Ceiling(_h1), bounds);
-            _pa = new RECT { Left = free.X, Top = free.Y, Right = free.Right, Bottom = free.Bottom };
-            _pe = new RECT { Left = open.X, Top = open.Y, Right = open.Right, Bottom = open.Bottom };
+            closed = Layout.Clamp(new CellRect(_cfg.FreeX, _cfg.FreeY, bw, bh), bounds);
+            _cfg.FreeX = closed.X; _cfg.FreeY = closed.Y;
         }
+        var open = Layout.Expand(closed, (int)Math.Ceiling(_w1), (int)Math.Ceiling(_h1), bounds);
+        _pa = new RECT { Left = closed.X, Top = closed.Y, Right = closed.Right, Bottom = closed.Bottom };
+        _pe = new RECT { Left = open.X, Top = open.Y, Right = open.Right, Bottom = open.Bottom };
 
         EnsureCanvas(_pe.Right - _pe.Left, _pe.Bottom - _pe.Top);
+        ChooseGear();
         EnsureFont();
         if (_backdrop == null || !SameRect(_backdrop.Monitor, _monitor)) RebuildBackdrop();
     }
+
+    // ---------------------------------------------------------------- settings icon placement
+
+    private int _gearCorner;           // 0 top-right, 1 top-left, 2 bottom-right, 3 bottom-left
+    private float _gearSz, _gearMargin;
+
+    private static (float X, float Y) CornerPos(float left, float top, float right, float bottom, int corner, float size, float margin) => corner switch
+    {
+        0 => (right - margin - size, top + margin),
+        1 => (left + margin, top + margin),
+        2 => (right - margin - size, bottom - margin - size),
+        _ => (left + margin, bottom - margin - size),
+    };
+
+    /// <summary>
+    /// Picks the settings icon's corner and size. Manual: what the user chose. Auto: it scales with the icons, and
+    /// takes the first corner (top-right first) where it clears every icon in both the closed and expanded layouts,
+    /// shrinking a little if the padding is tight.
+    /// </summary>
+    private void ChooseGear()
+    {
+        string c = _cfg.GearCorner.ToLowerInvariant();
+        int forced = c switch { "topright" => 0, "topleft" => 1, "bottomright" => 2, "bottomleft" => 3, _ => -1 };
+        float full = _cfg.GearSize > 0 ? _cfg.GearSize * _u : Math.Clamp(_iconPx * 0.27f, 10 * _u, 26 * _u);
+        if (forced >= 0) { _gearCorner = forced; _gearSz = full; _gearMargin = Math.Max(4 * _u, full * 0.4f); return; }
+
+        foreach (float k in new[] { 1f, 0.8f, 0.65f })
+        {
+            float sz = Math.Max(8 * _u, full * k), m = Math.Max(3 * _u, sz * 0.4f);
+            for (int corner = 0; corner < 4; corner++)
+                if (GearClear(corner, sz, m)) { _gearCorner = corner; _gearSz = sz; _gearMargin = m; return; }
+        }
+        _gearCorner = 0; _gearSz = Math.Max(8 * _u, full * 0.65f); _gearMargin = Math.Max(3 * _u, _gearSz * 0.4f);
+    }
+
+    private bool GearClear(int corner, float sz, float m)
+    {
+        float pad = 1.5f * _u;
+        // closed: the gear sits on the closed rect; the icons are the closed slots
+        float cl = _pa.Left - _pe.Left, ct = _pa.Top - _pe.Top, cr = _pa.Right - _pe.Left, cb = _pa.Bottom - _pe.Top;
+        var g = CornerPos(cl, ct, cr, cb, corner, sz, m);
+        for (int i = 0; i < _ke; i++)
+        {
+            var r = TileRect(i, 0f);
+            if (Hit(g.X - pad, g.Y - pad, sz + 2 * pad, sz + 2 * pad, r.X, r.Y, r.W, r.H)) return false;
+        }
+        // expanded: the gear sits on the expanded rect; the tiles are all shown items
+        g = CornerPos(0, 0, _pe.Right - _pe.Left, _pe.Bottom - _pe.Top, corner, sz, m);
+        int shown = Math.Min(_slots.Count, _ecols * _erows);
+        for (int i = 0; i < shown; i++)
+        {
+            var r = TileRect(i, 1f);
+            if (Hit(g.X - pad, g.Y - pad, sz + 2 * pad, sz + 2 * pad, r.X, r.Y, r.W, r.H)) return false;
+        }
+        return true;
+    }
+
+    private static bool Hit(float ax, float ay, float aw, float ah, float bx, float by, float bw, float bh)
+        => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 
     private static bool SameRect(RECT a, RECT b) => a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
 
@@ -409,8 +499,8 @@ internal sealed unsafe class Widget
     private (float X, float Y, float S) GearRect()
     {
         RECT cur = Current();
-        float s = 16 * _u, m = 7 * _u;
-        return (cur.Right - _pe.Left - s - m, cur.Top - _pe.Top + m, s);
+        var p = CornerPos(cur.Left - _pe.Left, cur.Top - _pe.Top, cur.Right - _pe.Left, cur.Bottom - _pe.Top, _gearCorner, _gearSz, _gearMargin);
+        return (p.X, p.Y, _gearSz);
     }
 
     private bool HitGear(int canvasX, int canvasY)
@@ -482,13 +572,19 @@ internal sealed unsafe class Widget
     private void EnsureFont()
     {
         float em = MathF.Max(8f, _cfg.LabelSize * _u);
-        if (_font != 0 && MathF.Abs(em - _fontEm) < 0.5f) return;
-        if (_font != 0) Gdip.GdipDeleteFont(_font);
-        Gdip.GdipCreateFont(_fontFamily, em, 0, 2 /* pixel */, out _font);
-        _fontEm = em;
-        if (_gearFont != 0) Gdip.GdipDeleteFont(_gearFont);
-        _gearFont = 0;
-        if (_gearFamily != 0) Gdip.GdipCreateFont(_gearFamily, 14 * _u, 0, 2, out _gearFont);
+        if (_font == 0 || MathF.Abs(em - _fontEm) >= 0.5f)
+        {
+            if (_font != 0) Gdip.GdipDeleteFont(_font);
+            Gdip.GdipCreateFont(_fontFamily, em, 0, 2 /* pixel */, out _font);
+            _fontEm = em;
+        }
+        if (_gearFont == 0 || MathF.Abs(_gearSz - _gearEm) >= 0.5f)
+        {
+            if (_gearFont != 0) Gdip.GdipDeleteFont(_gearFont);
+            _gearFont = 0;
+            if (_gearFamily != 0) Gdip.GdipCreateFont(_gearFamily, Math.Max(6f, _gearSz * 0.95f), 0, 2, out _gearFont);
+            _gearEm = _gearSz;
+        }
     }
 
     private static nint RoundRect(float x, float y, float w, float h, float r)
@@ -550,7 +646,7 @@ internal sealed unsafe class Widget
         float ow = MathF.Max(0f, _cfg.OutlineWidth * _u);
         if (ow > 0)
         {
-            Gdip.GdipCreatePen1(_outlineArgb, ow, 2, out nint pen);
+            Gdip.GdipCreatePen1(WithAlpha(_outlineArgb, _cfg.OutlineOpacity / 100f), ow, 2, out nint pen);
             nint path = RoundRect(cx + ow / 2, cy + ow / 2, cwid - ow, chei - ow, radius - ow / 2);
             Gdip.GdipDrawPath(_g, pen, path);
             Gdip.GdipDeletePath(path);
@@ -625,8 +721,8 @@ internal sealed unsafe class Widget
         if (_gearFont == 0) return;
         var g = GearRect();
         Gdip.GdipCreateSolidFill(WithAlpha(_labelArgb, _hoverGear ? 0.95f : 0.6f), out nint brush);
-        var rc = new RectF { X = g.X - 4 * _u, Y = g.Y - 2 * _u, Width = g.S + 8 * _u, Height = g.S + 6 * _u };
-        Gdip.GdipDrawString(_g, "", 1, _gearFont, rc, _strFmt, brush);
+        var rc = new RectF { X = g.X - g.S * 0.3f, Y = g.Y - g.S * 0.1f, Width = g.S * 1.6f, Height = g.S * 1.4f };
+        Gdip.GdipDrawString(_g, "\uE713", 1, _gearFont, rc, _strFmt, brush);
         Gdip.GdipDeleteBrush(brush);
     }
 
@@ -745,7 +841,13 @@ internal sealed unsafe class Widget
     private void Click()
     {
         bool tileHit = _downTile >= 0 && _downTile < _slots.Count;
-        if (_target == 1) { if (tileHit) { Launch(_downTile); Collapse(); } return; }
+        if (_target == 1)
+        {
+            // "Stay open" is for editing settings: launching keeps it open, and a click on empty space closes it.
+            if (tileHit) { Launch(_downTile); if (!_cfg.KeepOpen) Collapse(); }
+            else if (_cfg.KeepOpen) Collapse();
+            return;
+        }
         if (Clustered) { Expand(); return; }
         if (tileHit) Launch(_downTile);
     }
@@ -831,7 +933,11 @@ internal sealed unsafe class Widget
                 break;
 
             case Native.WM_ACTIVATE:
-                if ((wp & 0xFFFF) == 0 && !_inMenu) Collapse(); // lost focus: clicked elsewhere
+                if ((wp & 0xFFFF) == 0 && !_inMenu)
+                {
+                    // lost focus: clicked elsewhere. With "stay open" it just drops back to the desktop layer, still expanded.
+                    if (_cfg.KeepOpen && _target == 1) SendToBottom(); else Collapse();
+                }
                 return 0;
 
             case Native.WM_KEYDOWN:

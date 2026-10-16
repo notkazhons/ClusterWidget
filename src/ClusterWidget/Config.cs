@@ -39,8 +39,17 @@ internal sealed class Config
     public int FreeY { get; set; } = 100;
     /// <summary>How many icons the closed box shows (the last one becomes a preview of the rest when there are more).</summary>
     public int ClosedCount { get; set; } = 4;
-    /// <summary>Scales the whole cluster (box, icons, spacing, text), in percent.</summary>
-    public int BoxScale { get; set; } = 100;
+    /// <summary>Closed box size in desktop cells, width x height. 0 in either = automatic (the box fits its icons exactly).</summary>
+    public int BoxCols { get; set; } = 0;
+    public int BoxRows { get; set; } = 0;
+    /// <summary>Keep the expanded cluster open when clicking elsewhere (handy while editing settings).</summary>
+    public bool KeepOpen { get; set; } = false;
+    /// <summary>Opacity of the outline, 0-100 (on top of the outline color's own alpha).</summary>
+    public int OutlineOpacity { get; set; } = 100;
+    /// <summary>Settings icon corner: auto, topRight, topLeft, bottomRight, bottomLeft. Auto picks a corner that overlaps nothing.</summary>
+    public string GearCorner { get; set; } = "auto";
+    /// <summary>Settings icon size in pixels at 100%; 0 = automatic (scales with the icons).</summary>
+    public int GearSize { get; set; } = 0;
     /// <summary>Space between the box edge and the icons, closed. Pixels at 100%.</summary>
     public float ClosedPadding { get; set; } = 18f;
     /// <summary>Space between icons, closed. Pixels at 100%.</summary>
@@ -106,7 +115,8 @@ internal sealed class Config
     public void ResetLook()
     {
         var d = new Config();
-        ClosedCount = d.ClosedCount; BoxScale = d.BoxScale; ClosedPadding = d.ClosedPadding; ClosedGap = d.ClosedGap;
+        ClosedCount = d.ClosedCount; BoxCols = d.BoxCols; BoxRows = d.BoxRows; OutlineOpacity = d.OutlineOpacity;
+        GearCorner = d.GearCorner; GearSize = d.GearSize; ClosedPadding = d.ClosedPadding; ClosedGap = d.ClosedGap;
         OpenPadding = d.OpenPadding; OpenGap = d.OpenGap;
         Opacity = d.Opacity; Tint = d.Tint; Blur = d.Blur; OutlineColor = d.OutlineColor; OutlineWidth = d.OutlineWidth;
         CornerRadius = d.CornerRadius; IconScale = d.IconScale; ShowLabels = d.ShowLabels;
@@ -115,7 +125,11 @@ internal sealed class Config
     private void Sanitize()
     {
         ClosedCount = Math.Clamp(ClosedCount, 1, 16);
-        BoxScale = Math.Clamp(BoxScale, 40, 300);
+        BoxCols = Math.Clamp(BoxCols, 0, 20);
+        BoxRows = Math.Clamp(BoxRows, 0, 20);
+        OutlineOpacity = Math.Clamp(OutlineOpacity, 0, 100);
+        GearSize = Math.Clamp(GearSize, 0, 60);
+        GearCorner ??= "auto";
         ClosedPadding = Math.Clamp(ClosedPadding, 0f, 80f);
         ClosedGap = Math.Clamp(ClosedGap, 0f, 80f);
         OpenPadding = Math.Clamp(OpenPadding, 0f, 80f);

@@ -107,6 +107,26 @@ internal static unsafe partial class Native
 
     private static readonly nint HKEY_CURRENT_USER = unchecked((nint)0x80000001);
 
+    [LibraryImport("advapi32.dll", EntryPoint = "RegSetKeyValueW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int RegSetKeyValue(nint hkey, string subKey, string value, uint type, char* data, uint bytes);
+    [LibraryImport("advapi32.dll", EntryPoint = "RegDeleteKeyValueW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int RegDeleteKeyValue(nint hkey, string subKey, string value);
+    [LibraryImport("user32.dll", EntryPoint = "MessageBoxW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial int MessageBox(nint owner, string text, string caption, uint type);
+
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    /// <summary>Whether the per-user Run entry for this app exists.</summary>
+    public static bool StartsWithWindows() => RegString(RunKey, "ClusterWidget") != null;
+
+    /// <summary>Adds or removes the per-user Run entry that launches this exe at sign-in.</summary>
+    public static void SetStartsWithWindows(bool on)
+    {
+        if (!on) { RegDeleteKeyValue(HKEY_CURRENT_USER, RunKey, "ClusterWidget"); return; }
+        string cmd = "\"" + Environment.ProcessPath + "\"";
+        fixed (char* p = cmd) RegSetKeyValue(HKEY_CURRENT_USER, RunKey, "ClusterWidget", 1 /* REG_SZ */, p, (uint)((cmd.Length + 1) * sizeof(char)));
+    }
+
     public static bool RegDword(string subKey, string value, out uint result)
     {
         uint v = 0, size = 4;

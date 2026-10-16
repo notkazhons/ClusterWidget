@@ -10,9 +10,9 @@ internal sealed unsafe class SettingsWindow
     private enum Kind { Slider, TintSwatch, OutlineSwatch }
 
     private sealed record Def(string Label, Kind Kind, int Min = 0, int Max = 0, string Unit = "",
-        Func<Config, int>? Get = null, Action<Config, int>? Set = null, bool Blur = false);
+        Func<Config, int>? Get = null, Action<Config, int>? Set = null, bool Blur = false, bool AutoAtZero = false);
 
-    private const int IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdBase = 100;
+    private const int IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdKeepOpen = 304, IdStartup = 305, IdGear = 306, IdBase = 100;
     private const int RowH = 40, LeftX = 16, RightX = 404;
 
     private static readonly Def[] Look =
@@ -23,6 +23,7 @@ internal sealed unsafe class SettingsWindow
             (c, v) => c.Tint = Config.ColorText(((uint)MathF.Round(v * 2.55f) << 24) | (Config.Color(c.Tint, 0x8C14181C) & 0xFFFFFF))),
         new("Tint color", Kind.TintSwatch),
         new("Outline color", Kind.OutlineSwatch),
+        new("Outline opacity", Kind.Slider, 0, 100, "%", c => c.OutlineOpacity, (c, v) => c.OutlineOpacity = v),
         new("Outline thickness", Kind.Slider, 0, 12, "px", c => (int)MathF.Round(c.OutlineWidth), (c, v) => c.OutlineWidth = v),
         new("Corner roundness", Kind.Slider, 0, 100, "px", c => (int)MathF.Round(c.CornerRadius), (c, v) => c.CornerRadius = v),
     };
@@ -30,12 +31,14 @@ internal sealed unsafe class SettingsWindow
     private static readonly Def[] Layouts =
     {
         new("Icons when closed", Kind.Slider, 1, 16, "", c => c.ClosedCount, (c, v) => c.ClosedCount = v),
-        new("Cluster size", Kind.Slider, 40, 300, "%", c => c.BoxScale, (c, v) => c.BoxScale = v),
+        new("Width (grid cells)", Kind.Slider, 0, 12, "", c => c.BoxCols, (c, v) => c.BoxCols = v, AutoAtZero: true),
+        new("Height (grid cells)", Kind.Slider, 0, 12, "", c => c.BoxRows, (c, v) => c.BoxRows = v, AutoAtZero: true),
         new("Icon size", Kind.Slider, 50, 200, "%", c => (int)MathF.Round(c.IconScale * 100), (c, v) => c.IconScale = v / 100f),
         new("Padding, closed", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.ClosedPadding), (c, v) => c.ClosedPadding = v),
         new("Spacing, closed", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.ClosedGap), (c, v) => c.ClosedGap = v),
         new("Padding, expanded", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.OpenPadding), (c, v) => c.OpenPadding = v),
         new("Spacing, expanded", Kind.Slider, 0, 60, "px", c => (int)MathF.Round(c.OpenGap), (c, v) => c.OpenGap = v),
+        new("Settings icon size", Kind.Slider, 0, 40, "px", c => c.GearSize, (c, v) => c.GearSize = v, AutoAtZero: true),
     };
 
     // closed-box spacing presets: (name, padding, gap). Padding is never smaller than the gap, so icons never sit
@@ -45,11 +48,17 @@ internal sealed unsafe class SettingsWindow
         ("Compact", 12f, 6f), ("Cozy", 18f, 12f), ("Roomy", 26f, 20f),
     };
 
+    private static readonly (string Name, string Value)[] Corners =
+    {
+        ("Automatic (no overlap)", "auto"), ("Top right", "topRight"), ("Top left", "topLeft"),
+        ("Bottom right", "bottomRight"), ("Bottom left", "bottomLeft"),
+    };
+
     private static SettingsWindow? _open;
     private static bool _classRegistered;
 
     private readonly Widget _w;
-    private nint _hwnd, _font, _presetCombo, _snapCheck, _labelsCheck;
+    private nint _hwnd, _font, _presetCombo, _gearCombo, _snapCheck, _labelsCheck, _keepOpenCheck, _startupCheck;
     private float _s = 1f;
     private readonly Def[] _all;
     private readonly nint[] _tracks, _values;
@@ -66,6 +75,7 @@ internal sealed unsafe class SettingsWindow
 
     public static void Show(Widget w)
     {
+        w.SettingsOpened();
         if (_open != null && Native.IsWindow(_open._hwnd) != 0)
         {
             Native.ShowWindow(_open._hwnd, 9 /* SW_RESTORE */);
@@ -116,18 +126,25 @@ internal sealed unsafe class SettingsWindow
         for (int i = 0; i < Look.Length; i++) AddRow(i, LeftX, 40 + i * RowH);
         for (int i = 0; i < Layouts.Length; i++) AddRow(Look.Length + i, RightX, 40 + i * RowH);
 
-        int below = 40 + Look.Length * RowH;
-        Ctl("STATIC", "Closed spacing preset", 0, RightX, below + 4, 130, 20, 0);
-        _presetCombo = Ctl("COMBOBOX", "", 0x3 /* CBS_DROPDOWNLIST */ | 0x200000 /* WS_VSCROLL */ | 0x10000, RightX + 140, below, 170, 160, IdPreset);
+        int leftBelow = 40 + Look.Length * RowH, rightBelow = 40 + Layouts.Length * RowH;
+        _snapCheck = Ctl("BUTTON", "Snap to the desktop grid", 0x3 /* BS_AUTOCHECKBOX */ | 0x10000, LeftX, leftBelow + 4, 340, 24, IdSnap);
+        _labelsCheck = Ctl("BUTTON", "Show names when expanded", 0x3 | 0x10000, LeftX, leftBelow + 34, 340, 24, IdLabels);
+        _keepOpenCheck = Ctl("BUTTON", "Stay open when clicking away (for editing)", 0x3 | 0x10000, LeftX, leftBelow + 64, 360, 24, IdKeepOpen);
+        _startupCheck = Ctl("BUTTON", "Start with Windows", 0x3 | 0x10000, LeftX, leftBelow + 94, 340, 24, IdStartup);
+
+        Ctl("STATIC", "Closed spacing preset", 0, RightX, rightBelow + 4, 130, 20, 0);
+        _presetCombo = Ctl("COMBOBOX", "", 0x3 /* CBS_DROPDOWNLIST */ | 0x200000 /* WS_VSCROLL */ | 0x10000, RightX + 140, rightBelow, 200, 160, IdPreset);
         foreach (var p in Presets)
             fixed (char* t = p.Name) Native.SendMessage(_presetCombo, 0x143 /* CB_ADDSTRING */, 0, (nint)t);
-
-        _snapCheck = Ctl("BUTTON", "Snap to the desktop grid", 0x3 | 0x10000, LeftX, below + 4, 340, 24, IdSnap);
-        _labelsCheck = Ctl("BUTTON", "Show names when expanded", 0x3 | 0x10000, LeftX, below + 4 + 32, 340, 24, IdLabels);
-        Ctl("BUTTON", "Reset all", 0x10000, RightX, below + 4 + 44, 110, 28, IdReset);
+        Ctl("STATIC", "Settings icon position", 0, RightX, rightBelow + 44, 130, 20, 0);
+        _gearCombo = Ctl("COMBOBOX", "", 0x3 | 0x200000 | 0x10000, RightX + 140, rightBelow + 40, 200, 200, IdGear);
+        foreach (var c in Corners)
+            fixed (char* t = c.Name) Native.SendMessage(_gearCombo, 0x143, 0, (nint)t);
+        Ctl("BUTTON", "Reset all", 0x10000, RightX, rightBelow + 84, 110, 28, IdReset);
         Sync();
 
-        int clientW = (int)(796 * _s), clientH = (int)((below + 4 + 44 + 28 + 18) * _s);
+        int bottom = Math.Max(leftBelow + 94 + 24, rightBelow + 84 + 28) + 18;
+        int clientW = (int)(796 * _s), clientH = (int)(bottom * _s);
         Native.GetWindowRect(_hwnd, out RECT wr);
         Native.GetClientRect(_hwnd, out RECT cr);
         int w = clientW + (wr.Right - wr.Left) - cr.Right, h = clientH + (wr.Bottom - wr.Top) - cr.Bottom;
@@ -160,6 +177,8 @@ internal sealed unsafe class SettingsWindow
         _values[index] = Ctl("STATIC", "", 0x2 /* SS_RIGHT */, x + 300, y + 4, 52, 20, 0);
     }
 
+    private static string ValueText(Def d, int v) => d.AutoAtZero && v == 0 ? "auto" : v + d.Unit;
+
     /// <summary>Pushes the current config into every control.</summary>
     private void Sync()
     {
@@ -169,14 +188,21 @@ internal sealed unsafe class SettingsWindow
             if (_all[i].Kind != Kind.Slider) continue;
             int v = _all[i].Get!(cfg);
             Native.SendMessage(_tracks[i], 0x405 /* TBM_SETPOS */, 1, v);
-            Native.SetWindowText(_values[i], v + _all[i].Unit);
+            Native.SetWindowText(_values[i], ValueText(_all[i], v));
         }
         Native.SendMessage(_snapCheck, 0xF1 /* BM_SETCHECK */, cfg.Snap ? 1 : 0, 0);
         Native.SendMessage(_labelsCheck, 0xF1, cfg.ShowLabels ? 1 : 0, 0);
+        Native.SendMessage(_keepOpenCheck, 0xF1, cfg.KeepOpen ? 1 : 0, 0);
+        Native.SendMessage(_startupCheck, 0xF1, Native.StartsWithWindows() ? 1 : 0, 0);
+
         int preset = -1;
         for (int i = 0; i < Presets.Length; i++)
             if (MathF.Abs(cfg.ClosedPadding - Presets[i].Padding) < 0.5f && MathF.Abs(cfg.ClosedGap - Presets[i].Gap) < 0.5f) preset = i;
         Native.SendMessage(_presetCombo, 0x14E /* CB_SETCURSEL */, preset, 0);
+        int corner = 0;
+        for (int i = 0; i < Corners.Length; i++)
+            if (Corners[i].Value.Equals(cfg.GearCorner, StringComparison.OrdinalIgnoreCase)) corner = i;
+        Native.SendMessage(_gearCombo, 0x14E, corner, 0);
         for (int i = 0; i < _all.Length; i++)
             if (_all[i].Kind != Kind.Slider) Native.InvalidateRect(Native.GetDlgItem(_hwnd, IdBase + i), 0, 1);
     }
@@ -213,11 +239,11 @@ internal sealed unsafe class SettingsWindow
                     if (_tracks[i] == 0 || _tracks[i] != lp) continue;
                     int pos = (int)Native.SendMessage(lp, 0x400 /* TBM_GETPOS */, 0, 0);
                     _all[i].Set!(_w.Cfg, pos);
-                    Native.SetWindowText(_values[i], pos + _all[i].Unit);
+                    Native.SetWindowText(_values[i], ValueText(_all[i], pos));
                     _w.LookChanged(_all[i].Blur);
-                    if (i >= Look.Length + 3 && i <= Look.Length + 4) Sync(); // spacing sliders may no longer match a preset
                     break;
                 }
+                Sync(); // padding/spacing sliders may no longer match a preset
                 return 0;
 
             case 0x111: // WM_COMMAND
@@ -235,9 +261,29 @@ internal sealed unsafe class SettingsWindow
                         _w.LookChanged(false);
                     }
                 }
+                else if (id == IdGear && code == 1)
+                {
+                    int sel = (int)Native.SendMessage(_gearCombo, 0x147, 0, 0);
+                    if (sel >= 0 && sel < Corners.Length) { cfg.GearCorner = Corners[sel].Value; _w.LookChanged(false); }
+                }
                 else if (id == IdSnap) { cfg.Snap = Native.SendMessage(_snapCheck, 0xF0 /* BM_GETCHECK */, 0, 0) == 1; _w.SnapToggled(); }
                 else if (id == IdLabels) { cfg.ShowLabels = Native.SendMessage(_labelsCheck, 0xF0, 0, 0) == 1; _w.LookChanged(false); }
-                else if (id == IdReset) { cfg.ResetLook(); Sync(); _w.LookChanged(true); }
+                else if (id == IdKeepOpen)
+                {
+                    cfg.KeepOpen = Native.SendMessage(_keepOpenCheck, 0xF0, 0, 0) == 1;
+                    _w.LookChanged(false);
+                    _w.SettingsOpened(); // turning it on opens the cluster so there is something to look at
+                }
+                else if (id == IdStartup) Native.SetStartsWithWindows(Native.SendMessage(_startupCheck, 0xF0, 0, 0) == 1);
+                else if (id == IdReset)
+                {
+                    // MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2: "No" is the default so Enter cannot reset by accident
+                    if (Native.MessageBox(_hwnd, "Reset all look and layout settings to their defaults?\n\nYour icons and the cluster's position are kept.",
+                            "Reset settings", 0x4 | 0x20 | 0x100) == 6 /* IDYES */)
+                    {
+                        cfg.ResetLook(); Sync(); _w.LookChanged(true);
+                    }
+                }
                 return 0;
             }
 
