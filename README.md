@@ -46,6 +46,25 @@ Windows 11 (x64). The app is not code-signed, so Windows SmartScreen may warn th
 To start it with Windows, turn on *Start with Windows* (Settings, Behavior tab). To remove it, delete the folder and
 `%APPDATA%\ClusterWidget`.
 
+### If Windows won't let you run it
+
+The app is unsigned, and a freshly downloaded unsigned program is often blocked. Windows says things like *"Windows cannot
+access the specified device, path, or file. You may not have the appropriate permissions"*, or SmartScreen / Defender
+removes the file. Try these in order:
+
+1. **Unblock the zip before unzipping.** Right-click the downloaded `.zip`, choose *Properties*, tick **Unblock** at the
+   bottom, press OK, and only then extract it. (Or in PowerShell: `Unblock-File .\ClusterWidget-1.0.0-win-x64.zip`.)
+2. **Extract it first.** Do not run it from inside the zip. Unzip to a normal folder such as `C:\Tools\ClusterWidget` or
+   your Documents (not Program Files, not a network drive).
+3. **Windows Security may have removed it.** Open *Windows Security, Virus & threat protection, Protection history*. If
+   `ClusterWidget.exe` is listed, choose *Restore* and *Allow on device*, or add its folder under *Exclusions*.
+4. **SmartScreen:** if you see "Windows protected your PC", choose *More info*, then *Run anyway*.
+5. **Smart App Control** (Windows 11, Settings, Privacy & security, Windows Security, App & browser control) blocks
+   unsigned programs while it is **On**. Switch it to Off, or build the app yourself (see below).
+
+You can verify the download with the `.sha256` file on the release page: `Get-FileHash .\ClusterWidget-1.0.0-win-x64.zip`
+should print the same value. The source is all here, and building it yourself gives you an exe your own machine trusts.
+
 ## Using it
 
 | You want to | Do this |
