@@ -1093,6 +1093,7 @@ internal sealed unsafe class Widget
         Native.GetCursorPos(out POINT pt);
         nint menu = Native.CreatePopupMenu();
         Native.AppendMenu(menu, 0, 5, "Settings...");
+        if (_slots.Count > 1 && _target == 0) Native.AppendMenu(menu, 0, 8, "Arrange icons (drag them in the expanded view)");
         if (tile >= 0 && tile < _slots.Count)
             Native.AppendMenu(menu, 0, 3, $"Remove \"{_slots[tile].Item.DisplayName}\"");
         Native.AppendMenu(menu, 0x800, 0, null);
@@ -1119,6 +1120,7 @@ internal sealed unsafe class Widget
                 break;
             case 4: App.Quit(); break;
             case 5: SettingsWindow.Show(this); break;
+            case 8: Expand(); break; // opens even when every icon already fits closed, so a small cluster can be re-ordered too
             case 6: SettingsWindow.Show(App.NewCluster(this)); break;
             case 7: SettingsWindow.DeleteWithConfirm(this); break;
         }
