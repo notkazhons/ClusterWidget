@@ -22,6 +22,8 @@
   <img src="docs/screenshots/mine-art.png" height="210" alt="Another cluster with the same look">
 </p>
 
+<p align="center"><img src="docs/demo.gif" width="560" alt="Clicking a cluster opens it, clicking away closes it"></p>
+
 ## Why
 
 Desktops fill up with shortcuts. A **cluster** is a small box that shows a few of them (like a phone folder) and opens
