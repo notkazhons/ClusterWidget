@@ -17,9 +17,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/closed.png" height="210" alt="A closed cluster">
-  <img src="docs/screenshots/expanded.png" height="210" alt="The same cluster expanded">
-  <img src="docs/screenshots/picture.png" height="210" alt="A cluster with a picture background">
+  <img src="docs/screenshots/mine-games.png" height="210" alt="A closed cluster">
+  <img src="docs/screenshots/mine-games-open.png" height="210" alt="The same cluster expanded">
+  <img src="docs/screenshots/mine-art.png" height="210" alt="Another cluster with the same look">
 </p>
 
 ## Why
