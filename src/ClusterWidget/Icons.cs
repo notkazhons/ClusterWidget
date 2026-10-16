@@ -43,7 +43,7 @@ internal sealed class IconImage : IDisposable
             new Span<byte>((void*)pixels, px * px * 4).Clear();
             Gdip.GdipCreateBitmapFromScan0(px, px, px * 4, Gdip.PixelFormat32bppPARGB, pixels, out nint bmp);
             Gdip.GdipGetImageGraphicsContext(bmp, out nint g);
-            Gdip.GdipSetInterpolationMode(g, 7);
+            Gdip.GdipSetInterpolationMode(g, 6); // high-quality bilinear: nearly as good as bicubic for a 256 -> 60 shrink, and noticeably cheaper
             Gdip.GdipSetPixelOffsetMode(g, 2);
             Gdip.GdipDrawImageRectRectI(g, big, 0, 0, px, px, 0, 0, srcSize, srcSize, 2, 0, 0, 0);
             Gdip.GdipDeleteGraphics(g);

@@ -16,6 +16,12 @@ internal unsafe struct OPENFILENAME
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct TCITEM { public uint mask, dwState, dwStateMask; public char* pszText; public int cchTextMax, iImage; public nint lParam; }
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NMHDR { public nint hwndFrom; public nuint idFrom; public int code; }
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct ICONINFO { public int fIcon; public uint xHotspot, yHotspot; public nint hbmMask, hbmColor; }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -99,12 +105,17 @@ internal static unsafe partial class Native
     [LibraryImport("user32.dll")] public static partial nint SetThreadDpiAwarenessContext(nint ctx);
     [LibraryImport("user32.dll")] public static partial int GetAwarenessFromDpiAwarenessContext(nint ctx);
     [LibraryImport("user32.dll")] public static partial nint GetDlgItem(nint h, int id);
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowTextW")] public static partial int GetWindowText(nint h, char* buf, int max);
+    [LibraryImport("user32.dll")] public static partial int EnableWindow(nint h, int enable);
+    [LibraryImport("user32.dll")] public static partial int IsDialogMessage(nint dlg, in MSG msg);
     [LibraryImport("user32.dll")] public static partial nint SetFocus(nint h);
     [LibraryImport("user32.dll")] public static partial int IsWindow(nint h);
     [LibraryImport("user32.dll", EntryPoint = "SetWindowTextW", StringMarshalling = StringMarshalling.Utf16)] public static partial int SetWindowText(nint h, string text);
     [LibraryImport("user32.dll")] public static partial int GetClientRect(nint h, out RECT r);
 
     [LibraryImport("gdi32.dll")] public static partial nint CreateSolidBrush(uint colorRef);
+    [LibraryImport("gdi32.dll")] public static partial int SetBkMode(nint dc, int mode);
+    [LibraryImport("gdi32.dll")] public static partial nint GetStockObject(int index);
     [LibraryImport("gdi32.dll", EntryPoint = "CreateFontW", StringMarshalling = StringMarshalling.Utf16)]
     public static partial nint CreateFont(int h, int w, int esc, int ori, int weight, uint italic, uint underline, uint strike, uint charset, uint outPrec, uint clipPrec, uint quality, uint pitch, string face);
 
@@ -161,6 +172,8 @@ internal static unsafe partial class Gdip
     [LibraryImport("gdiplus.dll")] public static partial int GdipBitmapUnlockBits(nint bmp, in BitmapData data);
     [LibraryImport("gdiplus.dll")] public static partial int GdipCreateBitmapFromHICON(nint icon, out nint bmp);
     [LibraryImport("gdiplus.dll")] public static partial int GdipCreateHICONFromBitmap(nint bmp, out nint icon);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipSetClipRectI(nint g, int x, int y, int w, int h, int mode);
+    [LibraryImport("gdiplus.dll")] public static partial int GdipResetClip(nint g);
     [LibraryImport("gdiplus.dll")] public static partial int GdipFillRectangle(nint g, nint brush, float x, float y, float w, float h);
     [LibraryImport("gdiplus.dll")] public static partial int GdipGetImageWidth(nint img, out uint w);
     [LibraryImport("gdiplus.dll")] public static partial int GdipGetImageHeight(nint img, out uint h);

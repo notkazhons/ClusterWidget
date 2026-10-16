@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 
 namespace ClusterWidget;
 
-/// <summary>Reads the desktop icon grid the shell uses, so the widget can snap to the same cells.</summary>
+/// <summary>Reads the desktop icon grid the shell uses, so a cluster can snap to the same cells.</summary>
 internal static class DesktopGrid
 {
     public static (int W, int H) CellSize()
@@ -32,13 +32,12 @@ internal static class DesktopGrid
 }
 
 /// <summary>
-/// The widget window: a per-pixel-alpha tool window owned by the desktop (so Win+D leaves it alone), drawn by GDI+ into a
+/// One cluster: a per-pixel-alpha tool window owned by the desktop (so Win+D leaves it alone), drawn by GDI+ into a
 /// premultiplied DIB and pushed with UpdateLayeredWindow. Event-driven: timers only run while animating.
 /// </summary>
 internal sealed unsafe class Widget
 {
-    private const nuint TimerAnim = 1, TimerReload = 2, TimerBackdrop = 3, TimerSave = 4;
-    private const uint WM_CONFIG_CHANGED = Native.WM_APP + 1, WM_TRAY = Native.WM_APP + 3;
+    private const nuint TimerAnim = 1, TimerBackdrop = 3, TimerSave = 4, TimerPreload = 5;
 
     private sealed class Slot
     {
@@ -47,27 +46,26 @@ internal sealed unsafe class Widget
         public bool Failed, MiniFailed;
     }
 
-    private static Widget _self = null!;
+    private static readonly Dictionary<nint, Widget> Map = new();
+    private static bool _classRegistered;
 
     private Config _cfg;
-    private nint _hwnd, _trayIcon;
-    private uint _taskbarCreated;
-    private nuint _gdipToken;
+    private nint _hwnd;
     private readonly List<Slot> _slots = new();
-    private FileSystemWatcher? _watcher;
-    private long _lastSave;
+    private DateTime _stamp;      // last write time of our file as we know it (to tell our own saves from outside edits)
     private Backdrop? _backdrop;
     private BackgroundImage? _bgImage;
     private RECT _monitor;
 
-    // geometry, physical pixels. _u scales every authored pixel value (DPI x cluster size).
-    private int _ox, _oy, _cw, _ch;           // desktop grid origin and cell size
+    // geometry, physical pixels. _u scales every authored pixel value (DPI).
+    private int _ox, _oy, _cw, _ch, _baseIcon;  // desktop grid origin, cell size, icon size from Windows
     private float _scale = 1f, _u = 1f;
     private int _iconPx, _miniPx, _tileW, _tileH;
     private float _gapC, _padC, _gapO, _padO;
     private int _ke, _ccols, _crows, _ecols, _erows; // closed count, closed grid, expanded grid
     private float _w0, _h0, _w1, _h1;         // natural content size, closed / expanded
     private RECT _pa, _pe;                    // closed / expanded window rects, screen coords
+    private POINT? _stickyTopLeft;            // while editing an open cluster, keep its top-left where it is
 
     // animation + input state
     private float _t;       // 0 closed .. 1 expanded
@@ -75,25 +73,33 @@ internal sealed unsafe class Widget
     private float _animFrom;
     private long _animStart;
     private bool _pressed, _dragging, _tracking, _inMenu, _downGear, _hoverGear, _inside, _allowZ;
+    private bool _preview, _gearPreview;      // settings-window toggles: hold the cluster open / show the settings icon
     private POINT _downPt, _grab;
     private int _downTile, _hover = -1;
 
     // drawing resources
-    private nint _memDc, _dib, _bmp, _g;
+    private readonly Perf.Series _animFrames = new(), _hoverFrames = new(), _dragFrames = new();
+    private readonly Perf.Series _pBg = new(), _pIcons = new(), _pLabels = new(), _pPresent = new();   // where a frame's time goes (perf mode)
+    private nint _memDc, _dib, _bmp, _g, _bits;
+    // cached background (blurred wallpaper + tint) for the whole expanded rect, so a frame copies it instead of re-blurring/blending millions of pixels
+    private nint _bgDib, _bgDc, _bgBmp, _bgG, _bgBits, _bgBrush;
+    private int _bgW, _bgH, _bgOx, _bgOy, _vx, _vy, _vw, _vh;   // _v*: the part of the cache that is valid
+    private bool _bgDirty = true;
+    private int _preloadNext;
+    private long _lastPreloadFrame;
     private int _canvasW, _canvasH;
     private nint _fontFamily, _font, _strFmt, _brushHover, _gearFamily, _gearFont;
     private float _fontEm, _gearEm;
     private uint _outlineArgb, _hoverArgb, _labelArgb;
 
-    public Widget(Config cfg) { _cfg = cfg; _self = this; }
+    public Widget(Config cfg) { _cfg = cfg; }
 
     public Config Cfg => _cfg;
 
-    public void Run()
+    /// <summary>Creates the window and shows the cluster.</summary>
+    public void Create()
     {
-        Gdip.GdiplusStartup(out _gdipToken, new GdiplusStartupInput { GdiplusVersion = 1 }, 0);
-        Native.CoInitializeEx(0, 2 /* apartment-threaded */);
-        Native.InitCommonControlsEx(new INITCOMMONCONTROLSEX { dwSize = (uint)sizeof(INITCOMMONCONTROLSEX), dwICC = 0x4 /* BAR_CLASSES */ });
+        long t0 = Perf.Start();
         CreateWindow();
         LoadSlots();
         ApplyStyle();
@@ -102,103 +108,73 @@ internal sealed unsafe class Widget
         Frame();
         Native.ShowWindow(_hwnd, 4 /* SW_SHOWNOACTIVATE */);
         SendToBottom();
-        AddTrayIcon();
-        StartWatcher();
+        _stamp = SafeWriteTime();
         Trim();
-
-        while (Native.GetMessage(out MSG m, 0, 0, 0) > 0) { Native.TranslateMessage(m); Native.DispatchMessage(m); }
-
-        RemoveTrayIcon();
-        _watcher?.Dispose();
-        FreeCanvas();
-        FreeStyle();
-        _backdrop?.Dispose();
-        _bgImage?.Dispose();
-        Gdip.GdiplusShutdown(_gdipToken);
+        if (Perf.On) Perf.Log($"[{_cfg.Name}] create: {Perf.Ms(t0):F1}ms, {_slots.Count} items, icon {_iconPx}px, closed {_ccols}x{_crows}, expanded {_ecols}x{_erows}, window {_pe.Right - _pe.Left}x{_pe.Bottom - _pe.Top}");
     }
 
-    private static void Trim() => Native.EmptyWorkingSet(Native.GetCurrentProcess());
+    public void Destroy()
+    {
+        Map.Remove(_hwnd);
+        if (_hwnd != 0) Native.DestroyWindow(_hwnd);
+        _hwnd = 0;
+        FreeCanvas();
+        FreeStyle();
+        _backdrop?.Dispose(); _backdrop = null;
+        _bgImage?.Dispose(); _bgImage = null;
+        foreach (var s in _slots) { s.Image?.Dispose(); s.Mini?.Dispose(); }
+        _slots.Clear();
+    }
+
+    /// <summary>After work that allocated: collect garbage and give the pages back (the widget sits idle most of the time).</summary>
+    private static void Trim()
+    {
+        GC.Collect();
+        Native.EmptyWorkingSet(Native.GetCurrentProcess());
+    }
+
+    private DateTime SafeWriteTime()
+    {
+        try { return File.GetLastWriteTimeUtc(_cfg.SourcePath); } catch (Exception) { return default; }
+    }
 
     // ---------------------------------------------------------------- window setup
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static nint WndProcThunk(nint h, uint m, nint w, nint l)
     {
-        try { return _self.WndProc(h, m, w, l); }
-        catch (Exception) { return Native.DefWindowProc(h, m, w, l); }
+        try { if (Map.TryGetValue(h, out var self)) return self.WndProc(h, m, w, l); }
+        catch (Exception) { /* never let an exception cross into native code */ }
+        return Native.DefWindowProc(h, m, w, l);
     }
 
     private void CreateWindow()
     {
         nint inst = Native.GetModuleHandle(0);
-        fixed (char* cls = "ClusterWidgetWindow")
+        if (!_classRegistered)
         {
-            var wc = new WNDCLASSEX
+            fixed (char* cls = "ClusterWidgetWindow")
             {
-                cbSize = (uint)sizeof(WNDCLASSEX),
-                lpfnWndProc = (nint)(delegate* unmanaged[Stdcall]<nint, uint, nint, nint, nint>)&WndProcThunk,
-                hInstance = inst,
-                hCursor = Native.LoadCursor(0, 32512 /* IDC_ARROW */),
-                lpszClassName = cls,
-            };
-            Native.RegisterClassEx(ref wc);
+                var wc = new WNDCLASSEX
+                {
+                    cbSize = (uint)sizeof(WNDCLASSEX),
+                    lpfnWndProc = (nint)(delegate* unmanaged[Stdcall]<nint, uint, nint, nint, nint>)&WndProcThunk,
+                    hInstance = inst,
+                    hCursor = Native.LoadCursor(0, 32512 /* IDC_ARROW */),
+                    lpszClassName = cls,
+                };
+                Native.RegisterClassEx(ref wc);
+            }
+            _classRegistered = true;
         }
         // Per-pixel-alpha top-level tool window. It is *owned* by the desktop (Progman): an owned window always stays
-        // above its owner, so when "show desktop" (Win+D) raises the desktop above every app, the widget rides along.
+        // above its owner, so when "show desktop" (Win+D) raises the desktop above every app, the cluster rides along.
         const uint WS_EX_LAYERED = 0x80000;
         _hwnd = Native.CreateWindowEx(WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_ACCEPTFILES, "ClusterWidgetWindow",
             "ClusterWidget", Native.WS_POPUP, 0, 0, 100, 100, 0, 0, inst, 0);
+        Map[_hwnd] = this;
         Native.SetWindowLongPtr(_hwnd, -8 /* GWLP_HWNDPARENT: sets the owner */, Native.GetShellWindow());
         Native.DragAcceptFiles(_hwnd, 1);
-        _taskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
-    }
-
-    // ---------------------------------------------------------------- tray icon (lives in the hidden-icons flyout until pinned)
-
-    private void AddTrayIcon()
-    {
-        if (_trayIcon == 0) _trayIcon = MakeTrayIcon();
-        NOTIFYICONDATA d = default;
-        d.cbSize = (uint)sizeof(NOTIFYICONDATA);
-        d.hWnd = _hwnd; d.uID = 1; d.uFlags = 0x7 /* MESSAGE | ICON | TIP */; d.uCallbackMessage = WM_TRAY; d.hIcon = _trayIcon;
-        const string tip = "Cluster widget";
-        for (int i = 0; i < tip.Length; i++) d.szTip[i] = tip[i];
-        Native.ShellNotifyIcon(0 /* NIM_ADD */, &d);
-    }
-
-    private void RemoveTrayIcon()
-    {
-        NOTIFYICONDATA d = default;
-        d.cbSize = (uint)sizeof(NOTIFYICONDATA); d.hWnd = _hwnd; d.uID = 1;
-        Native.ShellNotifyIcon(2 /* NIM_DELETE */, &d);
-        if (_trayIcon != 0) { Native.DestroyIcon(_trayIcon); _trayIcon = 0; }
-    }
-
-    /// <summary>A small rounded square with four dots, drawn once at startup.</summary>
-    private static nint MakeTrayIcon()
-    {
-        const int N = 32;
-        nint pixels = Marshal.AllocHGlobal(N * N * 4);
-        new Span<byte>((void*)pixels, N * N * 4).Clear();
-        Gdip.GdipCreateBitmapFromScan0(N, N, N * 4, Gdip.PixelFormat32bppPARGB, pixels, out nint bmp);
-        Gdip.GdipGetImageGraphicsContext(bmp, out nint g);
-        Gdip.GdipSetSmoothingMode(g, 4);
-        Gdip.GdipCreateSolidFill(0xFF4CC2FF, out nint blue);
-        Gdip.GdipCreateSolidFill(0xFFFFFFFF, out nint white);
-        nint body = RoundRect(2, 2, N - 4, N - 4, 9);
-        Gdip.GdipFillPath(g, blue, body);
-        Gdip.GdipDeletePath(body);
-        for (int k = 0; k < 4; k++)
-        {
-            nint dot = RoundRect(7 + k % 2 * 11, 7 + k / 2 * 11, 8, 8, 4);
-            Gdip.GdipFillPath(g, white, dot);
-            Gdip.GdipDeletePath(dot);
-        }
-        Gdip.GdipDeleteBrush(blue); Gdip.GdipDeleteBrush(white); Gdip.GdipDeleteGraphics(g);
-        Gdip.GdipCreateHICONFromBitmap(bmp, out nint icon);
-        Gdip.GdipDisposeImage(bmp);
-        Marshal.FreeHGlobal(pixels);
-        return icon;
     }
 
     // ---------------------------------------------------------------- config / slots
@@ -210,49 +186,74 @@ internal sealed unsafe class Widget
         foreach (var it in _cfg.Items) _slots.Add(new Slot { Item = it });
     }
 
-    private void ReloadConfig()
+    /// <summary>The file was changed by something other than us (a hand edit): load it again.</summary>
+    public void ReloadIfChangedOnDisk()
     {
-        _cfg = Config.Load();
+        DateTime now = SafeWriteTime();
+        if (now == _stamp) return;
+        var c = Config.Load(_cfg.SourcePath);
+        if (c == null) return;
+        _stamp = now;
+        _cfg = c;
+        _bgDirty = true;
         LoadSlots();
         ApplyStyle();
         Recompute();
         RebuildBackdrop();
         ApplyBackgroundImage();
         Frame();
+        SettingsWindow.Refresh();
     }
 
     /// <summary>Loads (or drops) the background picture to match the config; only reloads the file when its path changed.</summary>
     private void ApplyBackgroundImage()
     {
         string path = _cfg.BackgroundImage ?? "";
-        if (_bgImage != null && _bgImage.Path == path) { _bgImage.SetOpacity(_cfg.Opacity / 100f); return; }
+        float opacity = _cfg.ImageOpacity / 100f;
+        if (_bgImage != null && _bgImage.Path == path) { _bgImage.SetOpacity(opacity); return; }
         _bgImage?.Dispose();
-        _bgImage = path.Length == 0 ? null : BackgroundImage.Load(path, _cfg.Opacity / 100f);
+        _bgImage = path.Length == 0 ? null : BackgroundImage.Load(path, opacity);
     }
 
-    private void SaveConfig()
+    /// <summary>Writes the cluster's file now.</summary>
+    public void SaveNow()
     {
-        _lastSave = Environment.TickCount64;
         _cfg.Save();
+        _stamp = SafeWriteTime();
     }
 
     /// <summary>Called by the settings window after it changed a value.</summary>
     public void LookChanged(bool blurChanged)
     {
+        // While an open cluster is being edited keep its top-left corner still, so it does not jump around under the cursor.
+        if (_t > 0.01f) _stickyTopLeft = new POINT { X = _pe.Left, Y = _pe.Top };
         ApplyStyle();
         Recompute();
+        _stickyTopLeft = null;
         _backdrop?.SetOpacity(_cfg.Opacity / 100f);
+        _bgDirty = true;   // tint, opacity or anything else about the background may have changed
         ApplyBackgroundImage();
         if (blurChanged) Native.SetTimer(_hwnd, TimerBackdrop, 70, 0); // sliders fire fast: rebuild once they settle
         Frame();
-        Native.SetTimer(_hwnd, TimerSave, 500, 0);
+        if (!SettingsWindow.IsOpen) Native.SetTimer(_hwnd, TimerSave, 500, 0); // with settings open, edits wait for Apply
     }
 
-    /// <summary>Settings opened (or "stay open" switched on): with "stay open" the cluster expands so edits are visible.</summary>
-    public void SettingsOpened()
+    /// <summary>Repaints (settings opened/closed, so the settings icon can show or hide).</summary>
+    public void Repaint() => Frame();
+
+    /// <summary>Settings toggle: hold the cluster in its expanded view (ignores click-away) so edits to it are visible.</summary>
+    public void SetPreviewOpen(bool on)
     {
-        if (_cfg.KeepOpen && _target == 0 && _slots.Count > 0) Expand();
+        _preview = on;
+        if (on) { if (_target == 0 && _slots.Count > 0) Expand(activate: false); }
+        else Collapse();
     }
+
+    /// <summary>Settings toggle: show the settings icon even when the pointer is elsewhere.</summary>
+    public void SetGearPreview(bool on) { _gearPreview = on; Frame(); }
+
+    /// <summary>Current closed grid (columns, rows), used when switching from automatic to a fixed grid.</summary>
+    public (int Cols, int Rows) GridDims => (_ccols, _crows);
 
     /// <summary>Called after the snap option flipped: carry the current position over so the box does not jump.</summary>
     public void SnapToggled()
@@ -264,18 +265,6 @@ internal sealed unsafe class Widget
         }
         else { _cfg.FreeX = _pa.Left; _cfg.FreeY = _pa.Top; }
         LookChanged(false);
-    }
-
-    private void StartWatcher()
-    {
-        try
-        {
-            Directory.CreateDirectory(Config.Dir);
-            _watcher = new FileSystemWatcher(Config.Dir, "config.json") { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size };
-            _watcher.Changed += (_, _) => Native.PostMessage(_hwnd, WM_CONFIG_CHANGED, 0, 0);
-            _watcher.EnableRaisingEvents = true;
-        }
-        catch (Exception) { /* hot reload is optional; the menu entry still works */ }
     }
 
     // ---------------------------------------------------------------- geometry
@@ -296,8 +285,6 @@ internal sealed unsafe class Widget
         Relayout();
     }
 
-    private int _baseIcon;
-
     /// <summary>Recomputes every size and rectangle from the config and the cached grid (cheap enough for each drag step).</summary>
     private void Relayout()
     {
@@ -307,7 +294,7 @@ internal sealed unsafe class Widget
         int n = _slots.Count;
 
         // Closed box: exactly the icon grid plus the padding on every side. Icons never shrink; padding and spacing
-        // resize the box. Columns x Rows (both set) is the grid of icon slots; otherwise it is as square as the count allows.
+        // resize the box. Icons per row x per column (both set) is the grid of icon slots; otherwise it is as square as the count allows.
         bool gridSet = _cfg.BoxCols > 0 && _cfg.BoxRows > 0;
         _ke = Math.Clamp(n, 1, gridSet ? _cfg.BoxCols * _cfg.BoxRows : _cfg.ClosedCount);
         int s = _baseIcon;
@@ -318,9 +305,11 @@ internal sealed unsafe class Widget
         }
         _miniPx = Math.Max(8, (int)(s * 0.44f));
 
+        // Tiles are exactly as wide as an icon, so spacing 0 means icons touching, same as the closed box.
+        // Names, when shown, take a strip of height under each icon.
         float fontEm = MathF.Max(8f, _cfg.LabelSize * _u);
-        float labelH = _cfg.ShowLabels ? fontEm * 1.5f + 4 * _u : 0;
-        _tileW = Math.Max((int)(s * 1.45f), (int)(s + 12 * _u));
+        float labelH = _cfg.ShowLabels ? fontEm * 1.5f + 3 * _u : 0;
+        _tileW = s;
         _tileH = (int)(s + labelH);
 
         if (gridSet) { _ccols = _cfg.BoxCols; _crows = _cfg.BoxRows; }
@@ -331,8 +320,7 @@ internal sealed unsafe class Widget
         }
         _w0 = _ccols * s + (_ccols - 1) * _gapC + 2 * _padC;
         _h0 = _crows * s + (_crows - 1) * _gapC + 2 * _padC;
-        float boxW = _w0, boxH = _h0;
-        int bw = (int)Math.Ceiling(boxW), bh = (int)Math.Ceiling(boxH);
+        int bw = (int)Math.Ceiling(_w0), bh = (int)Math.Ceiling(_h0);
 
         // which monitor are we on?
         POINT center = _cfg.Snap
@@ -367,7 +355,10 @@ internal sealed unsafe class Widget
             closed = Layout.Clamp(new CellRect(_cfg.FreeX, _cfg.FreeY, bw, bh), bounds);
             _cfg.FreeX = closed.X; _cfg.FreeY = closed.Y;
         }
-        var open = Layout.Expand(closed, (int)Math.Ceiling(_w1), (int)Math.Ceiling(_h1), bounds);
+        int ow = (int)Math.Ceiling(_w1), oh = (int)Math.Ceiling(_h1);
+        var open = _stickyTopLeft is POINT tl
+            ? Layout.Clamp(new CellRect(tl.X, tl.Y, Math.Min(Math.Max(ow, bw), workW), Math.Min(Math.Max(oh, bh), workH)), bounds)
+            : Layout.Expand(closed, ow, oh, bounds);
         _pa = new RECT { Left = closed.X, Top = closed.Y, Right = closed.Right, Bottom = closed.Bottom };
         _pe = new RECT { Left = open.X, Top = open.Y, Right = open.Right, Bottom = open.Bottom };
 
@@ -404,13 +395,13 @@ internal sealed unsafe class Widget
         float OffY(float sz) => _cfg.GearOffsetY >= 0 ? _cfg.GearOffsetY * _u : Math.Max(3 * _u, sz * 0.4f);
         if (forced >= 0) { _gearCorner = forced; _gearSz = full; _gearMx = OffX(full); _gearMy = OffY(full); return; }
 
-        foreach (float k in new[] { 1f, 0.8f, 0.65f })
+        foreach (float k in new[] { 1f, 0.85f, 0.7f })
         {
-            float sz = Math.Max(8 * _u, full * k);
+            float sz = Math.Max(12 * _u, full * k);
             for (int corner = 0; corner < 4; corner++)
                 if (GearClear(corner, sz, OffX(sz), OffY(sz))) { _gearCorner = corner; _gearSz = sz; _gearMx = OffX(sz); _gearMy = OffY(sz); return; }
         }
-        float last = Math.Max(8 * _u, full * 0.65f);
+        float last = Math.Max(12 * _u, full * 0.85f); // nothing is fully clear: keep it readable, a few pixels of overlap are fine
         _gearCorner = 0; _gearSz = last; _gearMx = OffX(last); _gearMy = OffY(last);
     }
 
@@ -435,6 +426,7 @@ internal sealed unsafe class Widget
         }
         return true;
     }
+
     private static bool Hit(float ax, float ay, float aw, float ah, float bx, float by, float bw, float bh)
         => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 
@@ -442,15 +434,12 @@ internal sealed unsafe class Widget
 
     private void RebuildBackdrop()
     {
+        long t0 = Perf.Start();
         _backdrop?.Dispose();
         _backdrop = Backdrop.Build(_monitor, _cfg.Blur, _cfg.Opacity / 100f);
+        _bgDirty = true;
+        if (Perf.On) Perf.Log($"[{_cfg.Name}] backdrop rebuild (blur {_cfg.Blur}px): {Perf.Ms(t0):F1}ms");
     }
-
-    private RECT PixelRect(CellRect c, int gap) => new()
-    {
-        Left = _ox + c.X * _cw + gap, Top = _oy + c.Y * _ch + gap,
-        Right = _ox + c.Right * _cw - gap, Bottom = _oy + c.Bottom * _ch - gap,
-    };
 
     private RECT Current() => new()
     {
@@ -499,9 +488,12 @@ internal sealed unsafe class Widget
         return (p.X, p.Y, _gearSz);
     }
 
+    /// <summary>The settings icon shows while the pointer is over the cluster, always if chosen, or while the settings window's preview toggle is on.</summary>
+    private bool GearVisible => _inside || _cfg.GearAlways || _gearPreview;
+
     private bool HitGear(int canvasX, int canvasY)
     {
-        if (!_inside) return false; // the gear only exists while the pointer is over the cluster
+        if (!GearVisible) return false;
         var g = GearRect();
         float pad = 5 * _u;
         return canvasX >= g.X - pad && canvasX < g.X + g.S + pad && canvasY >= g.Y - pad && canvasY < g.Y + g.S + pad;
@@ -518,6 +510,7 @@ internal sealed unsafe class Widget
         nint screen = Native.GetDC(0);
         _memDc = Native.CreateCompatibleDC(screen);
         _dib = Native.CreateDIBSection(screen, ref bi, 0, out nint bits, 0, 0);
+        _bits = bits;
         Native.ReleaseDC(0, screen);
         Native.SelectObject(_memDc, _dib);
         // GDI+ draws straight into the DIB's memory as premultiplied ARGB, which is exactly what UpdateLayeredWindow wants.
@@ -529,8 +522,90 @@ internal sealed unsafe class Widget
         Gdip.GdipSetPixelOffsetMode(_g, 2);      // high quality
     }
 
+    private void FreeBgCache()
+    {
+        if (_bgBrush != 0) { Gdip.GdipDeleteBrush(_bgBrush); _bgBrush = 0; }
+        if (_bgG != 0) { Gdip.GdipDeleteGraphics(_bgG); _bgG = 0; }
+        if (_bgBmp != 0) { Gdip.GdipDisposeImage(_bgBmp); _bgBmp = 0; }
+        if (_bgDib != 0) { Native.DeleteObject(_bgDib); _bgDib = 0; }
+        if (_bgDc != 0) { Native.DeleteDC(_bgDc); _bgDc = 0; }
+        _bgBits = 0; _bgDirty = true; _vw = _vh = 0;
+    }
+
+    /// <summary>
+    /// Makes sure the cached background (blurred wallpaper under the tint, drawn once over the whole expanded rect) is
+    /// current. Returns false if it cannot be used, in which case the caller paints the background the slow way.
+    /// </summary>
+    private bool PrepareBgCache()
+    {
+        if (_backdrop == null || _canvasW <= 0 || _canvasH <= 0) return false;
+        if (_bgG == 0 || _bgW != _canvasW || _bgH != _canvasH)
+        {
+            FreeBgCache();
+            _bgW = _canvasW; _bgH = _canvasH;
+            var bi = new BITMAPINFOHEADER { biSize = (uint)sizeof(BITMAPINFOHEADER), biWidth = _bgW, biHeight = -_bgH, biPlanes = 1, biBitCount = 32 };
+            nint screen = Native.GetDC(0);
+            _bgDc = Native.CreateCompatibleDC(screen);
+            _bgDib = Native.CreateDIBSection(screen, ref bi, 0, out _bgBits, 0, 0);
+            Native.ReleaseDC(0, screen);
+            Native.SelectObject(_bgDc, _bgDib);
+            Gdip.GdipCreateBitmapFromScan0(_bgW, _bgH, _bgW * 4, Gdip.PixelFormat32bppPARGB, _bgBits, out _bgBmp);
+            Gdip.GdipGetImageGraphicsContext(_bgBmp, out _bgG);
+            Gdip.GdipSetInterpolationMode(_bgG, 6);
+            _bgDirty = true;
+        }
+        if (_bgOx != _pe.Left || _bgOy != _pe.Top) { _bgOx = _pe.Left; _bgOy = _pe.Top; _bgDirty = true; } // the wallpaper under the rect changed
+        // Closed (and not animating): only the closed rectangle is ever shown, so only that part is built. This keeps dragging
+        // a big cluster cheap. Expanding builds the whole thing once; it then stays valid until something about the background changes.
+        bool full = _t > 0.001f || _target == 1;
+        int nx = full ? 0 : _pa.Left - _pe.Left, ny = full ? 0 : _pa.Top - _pe.Top;
+        int nw = full ? _bgW : _pa.Right - _pa.Left, nh = full ? _bgH : _pa.Bottom - _pa.Top;
+        bool covered = !_bgDirty && nx >= _vx && ny >= _vy && nx + nw <= _vx + _vw && ny + nh <= _vy + _vh;
+        if (!covered)
+        {
+            long t0 = Perf.Start();
+            for (int row = 0; row < nh; row++)
+                new Span<byte>((void*)(_bgBits + (nint)(((long)(ny + row) * _bgW + nx) * 4)), nw * 4).Clear();
+            _backdrop.Place(_pe.Left, _pe.Top);
+            Gdip.GdipFillRectangle(_bgG, _backdrop.Brush, nx, ny, nw, nh);
+            Gdip.GdipCreateSolidFill(WithAlpha(Config.Color(_cfg.Tint, 0x8C14181C), _cfg.Opacity / 100f), out nint tint);
+            Gdip.GdipFillRectangle(_bgG, tint, nx, ny, nw, nh);
+            Gdip.GdipDeleteBrush(tint);
+            if (_bgBrush != 0) Gdip.GdipDeleteBrush(_bgBrush);
+            Gdip.GdipCreateTexture(_bgBmp, 4 /* clamp */, out _bgBrush);
+            _vx = nx; _vy = ny; _vw = nw; _vh = nh;
+            _bgDirty = false;
+            if (Perf.On) Perf.Log($"[{_cfg.Name}] background cache built ({nw}x{nh} of {_bgW}x{_bgH}): {Perf.Ms(t0):F1}ms");
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Paints the rounded background by copying the cached pixels for the current rectangle, then re-drawing only the four
+    /// rounded corners with anti-aliasing. Costs a memory copy instead of a full-screen texture fill.
+    /// </summary>
+    private void FastBackground(nint roundedPath, int x0, int y0, int w, int h, float radius)
+    {
+        for (int row = 0; row < h; row++)
+        {
+            long off = ((long)(y0 + row) * _canvasW + x0) * 4;
+            Buffer.MemoryCopy((void*)(_bgBits + (nint)off), (void*)(_bits + (nint)off), w * 4, w * 4);
+        }
+        int rr = Math.Min((int)MathF.Ceiling(radius) + 2, Math.Min(w, h) / 2);
+        for (int k = 0; k < 4; k++)
+        {
+            int xs = k % 2 == 0 ? x0 : x0 + w - rr, ys = k < 2 ? y0 : y0 + h - rr;
+            for (int row = 0; row < rr; row++)
+                new Span<byte>((void*)(_bits + (nint)(((long)(ys + row) * _canvasW + xs) * 4)), rr * 4).Clear(); // corner square back to transparent
+            Gdip.GdipSetClipRectI(_g, xs, ys, rr, rr, 0 /* replace */);
+            Gdip.GdipFillPath(_g, _bgBrush, roundedPath);                                                      // anti-aliased rounded corner
+        }
+        Gdip.GdipResetClip(_g);
+    }
+
     private void FreeCanvas()
     {
+        FreeBgCache();
         if (_g != 0) { Gdip.GdipDeleteGraphics(_g); _g = 0; }
         if (_bmp != 0) { Gdip.GdipDisposeImage(_bmp); _bmp = 0; }
         if (_dib != 0) { Native.DeleteObject(_dib); _dib = 0; }
@@ -552,7 +627,7 @@ internal sealed unsafe class Widget
         Gdip.GdipSetStringFormatTrimming(_strFmt, 3); // ellipsis at character
         Gdip.GdipCreateFontFamilyFromName("Segoe Fluent Icons", 0, out _gearFamily);
         if (_gearFamily == 0) Gdip.GdipCreateFontFamilyFromName("Segoe MDL2 Assets", 0, out _gearFamily);
-        _fontEm = 0;
+        _fontEm = 0; _gearEm = 0;
     }
 
     private void FreeStyle()
@@ -583,7 +658,7 @@ internal sealed unsafe class Widget
         }
     }
 
-    private static nint RoundRect(float x, float y, float w, float h, float r)
+    internal static nint RoundRect(float x, float y, float w, float h, float r)
     {
         r = MathF.Max(0.5f, MathF.Min(r, MathF.Min(w, h) / 2));
         float d = r * 2;
@@ -625,25 +700,36 @@ internal sealed unsafe class Widget
         float cx = cur.Left - _pe.Left, cy = cur.Top - _pe.Top, cwid = cur.Right - cur.Left, chei = cur.Bottom - cur.Top;
         float radius = MathF.Min(Radius, MathF.Min(cwid, chei) / 2);
 
-        // background: blurred wallpaper, then the tint on top
+        long tBg = Perf.On ? Perf.Start() : 0;
+        // background, bottom to top: blurred wallpaper, tint color, then the picture (if any) over the color
         nint bg = RoundRect(cx, cy, cwid, chei, radius);
+        if (PrepareBgCache()) FastBackground(bg, (int)cx, (int)cy, (int)cwid, (int)chei, radius);
+        else
+        {
+            if (_backdrop != null)
+            {
+                _backdrop.Place(_pe.Left, _pe.Top);
+                Gdip.GdipSetInterpolationMode(_g, 6);
+                Gdip.GdipFillPath(_g, _backdrop.Brush, bg);
+                Gdip.GdipSetInterpolationMode(_g, 7);
+            }
+            Gdip.GdipCreateSolidFill(WithAlpha(Config.Color(_cfg.Tint, 0x8C14181C), _cfg.Opacity / 100f), out nint tint);
+            Gdip.GdipFillPath(_g, tint, bg);
+            Gdip.GdipDeleteBrush(tint);
+        }
         if (_bgImage != null)
         {
             _bgImage.Place(cx, cy, cwid, chei, _cfg.ImageZoom / 100f, _cfg.ImagePanX / 100f, _cfg.ImagePanY / 100f);
             Gdip.GdipSetInterpolationMode(_g, 6);
             Gdip.GdipFillPath(_g, _bgImage.Brush, bg);
             Gdip.GdipSetInterpolationMode(_g, 7);
+            if (_cfg.ImageOverlayOpacity > 0)
+            {
+                Gdip.GdipCreateSolidFill(WithAlpha(Config.Color(_cfg.ImageOverlayColor, 0xFFFFFFFF), _cfg.ImageOverlayOpacity / 100f), out nint over);
+                Gdip.GdipFillPath(_g, over, bg);
+                Gdip.GdipDeleteBrush(over);
+            }
         }
-        else if (_backdrop != null)
-        {
-            _backdrop.Place(_pe.Left, _pe.Top);
-            Gdip.GdipSetInterpolationMode(_g, 6);
-            Gdip.GdipFillPath(_g, _backdrop.Brush, bg);
-            Gdip.GdipSetInterpolationMode(_g, 7);
-        }
-        Gdip.GdipCreateSolidFill(WithAlpha(Config.Color(_cfg.Tint, 0x8C14181C), _cfg.Opacity / 100f), out nint tint);
-        Gdip.GdipFillPath(_g, tint, bg);
-        Gdip.GdipDeleteBrush(tint);
         Gdip.GdipDeletePath(bg);
 
         float ow = MathF.Max(0f, _cfg.OutlineWidth * _u);
@@ -656,10 +742,13 @@ internal sealed unsafe class Widget
             Gdip.GdipDeletePen(pen);
         }
 
+        if (Perf.On) _pBg.Add(Perf.Ms(tBg));
         if (_slots.Count == 0) DrawEmptySlot(TileRect(0, _t), 1f - _t);
         int visible = Math.Min(VisibleSlots, _slots.Count);
+        long tTiles = Perf.On ? Perf.Start() : 0;
         for (int i = 0; i < visible; i++) DrawTile(i, TileRect(i, _t));
-        if (_inside) DrawGear();
+        if (Perf.On) _pIcons.Add(Perf.Ms(tTiles));
+        if (GearVisible) DrawGear();
     }
 
     private void DrawEmptySlot((float X, float Y, float W, float H) r, float alpha)
@@ -684,10 +773,10 @@ internal sealed unsafe class Widget
         }
 
         float left = r.X + (r.W - _iconPx) / 2, top = r.Y;
-        bool cluster = i == _ke - 1 && Clustered;
+        bool cluster = i == _ke - 1 && Clustered && _cfg.ClusterPreview;
         if (cluster) DrawCluster(i, left, top, 1f - _t);
         float bigAlpha = cluster ? _t : (i < _ke ? 1f : _t);
-        var img = GetImage(slot);
+        var img = i < _ke ? GetImage(slot) : slot.Image;   // closed slots load right away; the rest wait for the background loader
         if (img != null) DrawIcon(img, left, top, _iconPx, bigAlpha);
         else if (bigAlpha > 0.05f)
         {
@@ -698,11 +787,15 @@ internal sealed unsafe class Widget
 
         if (_cfg.ShowLabels && _t > 0.02f)
         {
+            long tL = Perf.On ? Perf.Start() : 0;
             Gdip.GdipCreateSolidFill(WithAlpha(_labelArgb, _t), out nint brush);
-            var rc = new RectF { X = r.X, Y = top + _iconPx + 3 * _u, Width = r.W, Height = _fontEm * 1.6f };
+            // the name may use the spacing on both sides of its icon, so it never runs into the next column's name
+            float side = _gapO / 2f;
+            var rc = new RectF { X = r.X - side, Y = top + _iconPx + 3 * _u, Width = r.W + 2 * side, Height = _fontEm * 1.6f };
             string name = slot.Item.DisplayName;
             Gdip.GdipDrawString(_g, name, name.Length, _font, rc, _strFmt, brush);
             Gdip.GdipDeleteBrush(brush);
+            if (Perf.On) _pLabels.Add(Perf.Ms(tL));
         }
     }
 
@@ -749,29 +842,50 @@ internal sealed unsafe class Widget
         return s.Mini;
     }
 
-    /// <summary>Loads every visible icon ahead of time so expanding never waits on the shell.</summary>
+    /// <summary>
+    /// Loads the icons of the expanded view in the background of the message loop: a few milliseconds of work per tick, so a
+    /// cluster with hundreds of icons never freezes. Icons not loaded yet show as faint placeholders until their turn.
+    /// </summary>
     private void Preload()
     {
-        for (int i = 0; i < ShownCount; i++) GetImage(_slots[i]);
+        _preloadNext = 0;
+        Native.SetTimer(_hwnd, TimerPreload, 8, 0);
     }
 
-    /// <summary>Drops icons that are only needed while expanded.</summary>
+    private void PreloadTick()
+    {
+        long t0 = Perf.Start();
+        int shown = ShownCount, loaded = 0;
+        while (_preloadNext < shown && Perf.Ms(t0) < 8.0)
+        {
+            var s = _slots[_preloadNext++];
+            if (s.Image == null && !s.Failed) { GetImage(s); loaded++; }
+        }
+        if (_preloadNext >= shown) { Native.KillTimer(_hwnd, TimerPreload); if (Perf.On) Perf.Log($"[{_cfg.Name}] icons loaded ({shown} shown)"); }
+        // expanded: show newly loaded icons, but at most ~12 times a second (a repaint of a big window is not free)
+        if (loaded > 0 && _t > 0.001f && (_preloadNext >= shown || Environment.TickCount64 - _lastPreloadFrame > 80)) { _lastPreloadFrame = Environment.TickCount64; Frame(); }
+    }
+
+    /// <summary>Drops icons that are only needed while expanded, but only when they would take a lot of memory.</summary>
     private void UnloadHidden()
     {
-        int keep = Clustered ? _ke - 1 : _ke;
+        int keep = Clustered && _cfg.ClusterPreview ? _ke - 1 : _ke;
+        long hiddenBytes = (long)Math.Max(0, _slots.Count - keep) * _iconPx * _iconPx * 4;
+        if (hiddenBytes < 24L * 1024 * 1024) return; // small enough to keep: the next expand is then instant
         for (int i = keep; i < _slots.Count; i++) { _slots[i].Image?.Dispose(); _slots[i].Image = null; _slots[i].Failed = false; }
     }
-
     /// <summary>Moves, resizes and repaints the window in a single call, so animation never tears.</summary>
     private void Present()
     {
-        if (_memDc == 0) return;
+        if (_memDc == 0 || _hwnd == 0) return;
         RECT cur = Current();
         var size = new SIZE { cx = cur.Right - cur.Left, cy = cur.Bottom - cur.Top };
         var dst = new POINT { X = cur.Left, Y = cur.Top };
         var src = new POINT { X = cur.Left - _pe.Left, Y = cur.Top - _pe.Top };
         var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = 255, AlphaFormat = 1 /* AC_SRC_ALPHA */ };
+        long tP = Perf.On ? Perf.Start() : 0;
         Native.UpdateLayeredWindow(_hwnd, 0, &dst, &size, _memDc, &src, 0, &blend, 2 /* ULW_ALPHA */);
+        if (Perf.On) _pPresent.Add(Perf.Ms(tP));
     }
 
     private void Frame() { Render(); Present(); }
@@ -787,15 +901,20 @@ internal sealed unsafe class Widget
         Native.SetTimer(_hwnd, TimerAnim, 8, 0);
     }
 
-    private void Expand()
+    private void Expand(bool activate = true)
     {
         if (_target == 1) return;
+        if (Perf.On) Perf.Log($"[{_cfg.Name}] expand requested");
         Preload();
         // Pop above the other windows while open, then take the keyboard so Esc and click-away (deactivation) can close it.
-        _allowZ = true;
-        Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
-        _allowZ = false;
-        Native.SetForegroundWindow(_hwnd);
+        // The settings window's preview toggle expands quietly instead: it stays on the desktop layer under the settings window.
+        if (activate)
+        {
+            _allowZ = true;
+            Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+            _allowZ = false;
+            Native.SetForegroundWindow(_hwnd);
+        }
         StartAnim(1);
     }
 
@@ -819,8 +938,10 @@ internal sealed unsafe class Widget
         float p = _cfg.AnimationMs <= 0 ? 1f : Math.Clamp((Environment.TickCount64 - _animStart) / (float)_cfg.AnimationMs, 0f, 1f);
         float e = 1f - MathF.Pow(1f - p, 3f);
         _t = p >= 1f ? _target : _animFrom + (_target - _animFrom) * e;
+        long t0 = Perf.Start();
         Frame();
-        if (p >= 1f) { Native.KillTimer(_hwnd, TimerAnim); FinishAnim(); }
+        _animFrames.Add(Perf.Ms(t0));
+        if (p >= 1f) { Native.KillTimer(_hwnd, TimerAnim); _animFrames.Flush($"[{_cfg.Name}] animation to {(_target == 1 ? "expanded" : "closed")} frames"); FinishAnim(); }
     }
 
     private void FinishAnim()
@@ -844,11 +965,11 @@ internal sealed unsafe class Widget
     private void Click()
     {
         bool tileHit = _downTile >= 0 && _downTile < _slots.Count;
+        if (Perf.On) Perf.Log($"[{_cfg.Name}] click: tileHit={tileHit} target={_target} clustered={Clustered} preview={_preview}");
         if (_target == 1)
         {
-            // "Stay open" is for editing settings: launching keeps it open, and a click on empty space closes it.
-            if (tileHit) { Launch(_downTile); if (!_cfg.KeepOpen) Collapse(); }
-            else if (_cfg.KeepOpen) Collapse();
+            // Held open by the settings window's preview toggle: icons still launch, nothing closes it.
+            if (tileHit) { Launch(_downTile); if (!_preview) Collapse(); }
             return;
         }
         if (Clustered) { Expand(); return; }
@@ -868,7 +989,7 @@ internal sealed unsafe class Widget
             _slots.Add(new Slot { Item = item });
         }
         Native.DragFinish(drop);
-        SaveConfig();
+        SaveNow();
         Recompute();
         Frame();
     }
@@ -878,10 +999,12 @@ internal sealed unsafe class Widget
         Native.GetCursorPos(out POINT pt);
         nint menu = Native.CreatePopupMenu();
         Native.AppendMenu(menu, 0, 5, "Settings...");
-        Native.AppendMenu(menu, 0, 1, "Reload config");
-        Native.AppendMenu(menu, 0, 2, "Open config file");
         if (tile >= 0 && tile < _slots.Count)
             Native.AppendMenu(menu, 0, 3, $"Remove \"{_slots[tile].Item.DisplayName}\"");
+        Native.AppendMenu(menu, 0x800, 0, null);
+        Native.AppendMenu(menu, 0, 6, "New cluster");
+        Native.AppendMenu(menu, 0, 7, "Delete this cluster...");
+        Native.AppendMenu(menu, 0, 2, "Open this cluster's file");
         Native.AppendMenu(menu, 0x800, 0, null);
         Native.AppendMenu(menu, 0, 4, "Exit");
         _inMenu = true;
@@ -891,18 +1014,19 @@ internal sealed unsafe class Widget
         Native.DestroyMenu(menu);
         switch (cmd)
         {
-            case 1: ReloadConfig(); break;
-            case 2: Native.ShellExecute(_hwnd, "open", Config.FilePath, null, null, 1); break;
+            case 2: Native.ShellExecute(_hwnd, "open", _cfg.SourcePath, null, null, 1); break;
             case 3:
                 _slots[tile].Image?.Dispose(); _slots[tile].Mini?.Dispose();
                 _cfg.Items.RemoveAt(tile);
                 _slots.RemoveAt(tile);
-                SaveConfig();
+                SaveNow();
                 Recompute();
                 Frame();
                 break;
-            case 4: Native.PostQuitMessage(0); break;
+            case 4: App.Quit(); break;
             case 5: SettingsWindow.Show(this); break;
+            case 6: SettingsWindow.Show(App.NewCluster(this)); break;
+            case 7: SettingsWindow.DeleteWithConfirm(this); break;
         }
     }
 
@@ -913,22 +1037,12 @@ internal sealed unsafe class Widget
 
     private nint WndProc(nint h, uint msg, nint wp, nint lp)
     {
-        if (msg == _taskbarCreated && _taskbarCreated != 0) { AddTrayIcon(); return 0; } // Explorer restarted
-
         switch (msg)
         {
             case Native.WM_ERASEBKGND: return 1;
 
-            case WM_TRAY:
-                switch ((uint)(lp & 0xFFFF))
-                {
-                    case 0x202 /* WM_LBUTTONUP */: SettingsWindow.Show(this); break;
-                    case 0x205 /* WM_RBUTTONUP */: ShowMenu(-1); break;
-                }
-                return 0;
-
             case Native.WM_MOUSEACTIVATE:
-                // Collapsed: a click must not raise the widget above other windows. Expanded: take focus (Esc, click-away).
+                // Collapsed: a click must not raise the cluster above other windows. Expanded: take focus (Esc, click-away).
                 return _target == 0 ? 3 /* MA_NOACTIVATE */ : 1;
 
             case Native.WM_WINDOWPOSCHANGING:
@@ -939,12 +1053,12 @@ internal sealed unsafe class Widget
                 if ((wp & 0xFFFF) == 0 && !_inMenu)
                 {
                     // lost focus: clicked elsewhere. With "stay open" it just drops back to the desktop layer, still expanded.
-                    if (_cfg.KeepOpen && _target == 1) SendToBottom(); else Collapse();
+                    if (_preview && _target == 1) SendToBottom(); else Collapse();
                 }
                 return 0;
 
             case Native.WM_KEYDOWN:
-                if (wp == 0x1B) Collapse();
+                if (wp == 0x1B && !_preview) Collapse();
                 return 0;
 
             case Native.WM_LBUTTONDOWN:
@@ -987,11 +1101,17 @@ internal sealed unsafe class Widget
                 if (hit >= _slots.Count) hit = -1;
                 bool gear = HitGear(CanvasX(lp), CanvasY(lp));
                 if (gear) hit = -1;
-                if (entered || hit != _hover || gear != _hoverGear) { _hover = hit; _hoverGear = gear; Frame(); }
+                if (entered || hit != _hover || gear != _hoverGear)
+                {
+                    long t0 = Perf.Start();
+                    _hover = hit; _hoverGear = gear; Frame();
+                    _hoverFrames.Add(Perf.Ms(t0));
+                }
                 return 0;
             }
 
             case Native.WM_MOUSELEAVE:
+                FlushPerf();
                 _tracking = false; _inside = false; _hoverGear = false;
                 _hover = -1;
                 if (_target == 0 && _t == 0f) { UnloadHidden(); Frame(); Trim(); }
@@ -1003,7 +1123,7 @@ internal sealed unsafe class Widget
                 bool wasDrag = _dragging;
                 _pressed = false; _dragging = false;
                 Native.ReleaseCapture();
-                if (wasDrag) SaveConfig();
+                if (wasDrag) { FlushPerf(); SaveNow(); }
                 else if (_downGear && HitGear(CanvasX(lp), CanvasY(lp))) SettingsWindow.Show(this);
                 else Click();
                 return 0;
@@ -1023,13 +1143,9 @@ internal sealed unsafe class Widget
 
             case Native.WM_TIMER:
                 if ((nuint)wp == TimerAnim) AnimTick();
-                else if ((nuint)wp == TimerReload) { Native.KillTimer(h, TimerReload); ReloadConfig(); }
+                else if ((nuint)wp == TimerPreload) PreloadTick();
                 else if ((nuint)wp == TimerBackdrop) { Native.KillTimer(h, TimerBackdrop); RebuildBackdrop(); Frame(); Trim(); }
-                else if ((nuint)wp == TimerSave) { Native.KillTimer(h, TimerSave); SaveConfig(); }
-                return 0;
-
-            case WM_CONFIG_CHANGED:
-                if (Environment.TickCount64 - _lastSave > 1000) Native.SetTimer(h, TimerReload, 250, 0);
+                else if ((nuint)wp == TimerSave) { Native.KillTimer(h, TimerSave); SaveNow(); }
                 return 0;
 
             case Native.WM_DISPLAYCHANGE:
@@ -1041,10 +1157,6 @@ internal sealed unsafe class Widget
                     Frame();
                     Trim();
                 }
-                return 0;
-
-            case Native.WM_DESTROY:
-                Native.PostQuitMessage(0);
                 return 0;
         }
         return Native.DefWindowProc(h, msg, wp, lp);
@@ -1063,7 +1175,18 @@ internal sealed unsafe class Widget
             _cfg.FreeX = cursor.X - _grab.X;
             _cfg.FreeY = cursor.Y - _grab.Y;
         }
+        long t0 = Perf.Start();
         Relayout();
         Frame();
+        _dragFrames.Add(Perf.Ms(t0));
+    }
+
+    /// <summary>Writes the hover/drag timing series (perf mode only).</summary>
+    public void FlushPerf()
+    {
+        _hoverFrames.Flush($"[{_cfg.Name}] hover redraw");
+        _pBg.Flush($"[{_cfg.Name}]   .. background fill"); _pIcons.Flush($"[{_cfg.Name}]   .. all tiles (icons+names)");
+        _pLabels.Flush($"[{_cfg.Name}]   .. one name"); _pPresent.Flush($"[{_cfg.Name}]   .. UpdateLayeredWindow");
+        _dragFrames.Flush($"[{_cfg.Name}] drag step (relayout+frame)");
     }
 }
