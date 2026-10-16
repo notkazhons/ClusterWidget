@@ -7,9 +7,10 @@ namespace ClusterWidget;
 internal sealed class IconImage : IDisposable
 {
     public nint Bitmap;
+    public readonly int Width, Height;
     private nint _pixels;
 
-    private IconImage(nint bitmap, nint pixels) { Bitmap = bitmap; _pixels = pixels; }
+    private IconImage(nint bitmap, nint pixels, int w, int h) { Bitmap = bitmap; _pixels = pixels; Width = w; Height = h; }
 
     private static readonly Guid IidImageFactory = new("bcc18b79-ba16-442f-80c4-8a59c30c463b");
 
@@ -53,7 +54,7 @@ internal sealed class IconImage : IDisposable
             Marshal.FreeHGlobal(pixels);
             return null;
         }
-        return new IconImage(bmp, pixels);
+        return new IconImage(bmp, pixels, bm.Width, bm.Height);
     }
 
     public void Dispose()

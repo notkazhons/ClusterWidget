@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -25,24 +24,27 @@ internal static class DesktopGrid
 
     private static nint FindListView()
     {
-        nint def = Native.FindWindowEx(Native.FindWindow("Progman", null), 0, "SHELLDLL_DefView", null);
+        nint def = Native.FindWindowEx(Native.GetShellWindow(), 0, "SHELLDLL_DefView", null);
         for (nint w = 0; def == 0 && (w = Native.FindWindowEx(0, w, "WorkerW", null)) != 0;)
             def = Native.FindWindowEx(w, 0, "SHELLDLL_DefView", null);
         return def == 0 ? 0 : Native.FindWindowEx(def, 0, "SysListView32", null);
     }
 }
 
-/// <summary>The widget window: acrylic backdrop, GDI+ drawing into a premultiplied DIB, event-driven (timers only while animating).</summary>
+/// <summary>
+/// The widget window: a layered child of the desktop (so Win+D leaves it alone) whose pixels are drawn by GDI+ into a
+/// premultiplied DIB and pushed with UpdateLayeredWindow. Event-driven: timers only run while animating.
+/// </summary>
 internal sealed unsafe class Widget
 {
-    private const nuint TimerAnim = 1, TimerReload = 2;
+    private const nuint TimerAnim = 1, TimerReload = 2, TimerBackdrop = 3, TimerSave = 4;
     private const uint WM_CONFIG_CHANGED = Native.WM_APP + 1;
 
     private sealed class Slot
     {
         public Item Item = null!;
-        public IconImage? Image;
-        public bool Failed;
+        public IconImage? Image, Mini;
+        public bool Failed, MiniFailed;
     }
 
     private static Widget _self = null!;
@@ -53,55 +55,61 @@ internal sealed unsafe class Widget
     private readonly List<Slot> _slots = new();
     private FileSystemWatcher? _watcher;
     private long _lastSave;
+    private Backdrop? _backdrop;
+    private RECT _monitor;
 
     // grid + geometry (physical pixels)
-    private int _ox, _oy, _cw, _ch;
+    private int _ox, _oy, _cw, _ch, _iconPx, _miniPx, _cols, _rows, _padX, _padY;
     private float _scale = 1f;
     private CellRect _bounds, _anchor, _expandedCells;
-    private int _tileCells, _cols, _rows, _iconPx;
-    private RECT _pa, _pe; // collapsed / expanded window rects, screen coords
+    private RECT _pa, _pe; // collapsed / expanded rects, screen coords
 
     // animation + input state
     private float _t;       // 0 collapsed .. 1 expanded
     private int _target;
     private float _animFrom;
     private long _animStart;
-    private bool _pressed, _dragging, _tracking, _inMenu, _allowZ;
+    private bool _pressed, _dragging, _tracking, _inMenu, _downGear, _hoverGear;
     private POINT _downPt, _grab;
     private int _downTile, _hover = -1;
+    private bool _allowZ;
 
     // drawing resources
     private nint _memDc, _dib, _bmp, _g;
     private int _canvasW, _canvasH;
-    private nint _fontFamily, _font, _strFmt, _brushLabel, _brushHover;
+    private nint _fontFamily, _font, _strFmt, _brushHover, _gearFamily, _gearFont;
     private float _fontEm;
     private uint _outlineArgb, _hoverArgb, _labelArgb;
 
     public Widget(Config cfg) { _cfg = cfg; _self = this; }
 
+    public Config Cfg => _cfg;
+
     public void Run()
     {
         Gdip.GdiplusStartup(out _gdipToken, new GdiplusStartupInput { GdiplusVersion = 1 }, 0);
         Native.CoInitializeEx(0, 2 /* apartment-threaded */);
+        Native.InitCommonControlsEx(new INITCOMMONCONTROLSEX { dwSize = (uint)sizeof(INITCOMMONCONTROLSEX), dwICC = 0x4 /* BAR_CLASSES */ });
         CreateWindow();
         LoadSlots();
         ApplyStyle();
         Recompute();
-        ApplyWindow();
-        Render();
+        Frame();
         Native.ShowWindow(_hwnd, 4 /* SW_SHOWNOACTIVATE */);
         SendToBottom();
-        Present();
         StartWatcher();
-        Native.EmptyWorkingSet(Native.GetCurrentProcess());
+        Trim();
 
         while (Native.GetMessage(out MSG m, 0, 0, 0) > 0) { Native.TranslateMessage(m); Native.DispatchMessage(m); }
 
         _watcher?.Dispose();
         FreeCanvas();
         FreeStyle();
+        _backdrop?.Dispose();
         Gdip.GdiplusShutdown(_gdipToken);
     }
+
+    private static void Trim() => Native.EmptyWorkingSet(Native.GetCurrentProcess());
 
     // ---------------------------------------------------------------- window setup
 
@@ -127,45 +135,20 @@ internal sealed unsafe class Widget
             };
             Native.RegisterClassEx(ref wc);
         }
-        _hwnd = Native.CreateWindowEx(Native.WS_EX_TOOLWINDOW | Native.WS_EX_ACCEPTFILES, "ClusterWidgetWindow", "ClusterWidget",
-            Native.WS_POPUP, 0, 0, 100, 100, 0, 0, inst, 0);
+        // Per-pixel-alpha top-level tool window. It is *owned* by the desktop (Progman): an owned window always stays
+        // above its owner, so when "show desktop" (Win+D) raises the desktop above every app, the widget rides along.
+        const uint WS_EX_LAYERED = 0x80000;
+        _hwnd = Native.CreateWindowEx(WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_ACCEPTFILES, "ClusterWidgetWindow",
+            "ClusterWidget", Native.WS_POPUP, 0, 0, 100, 100, 0, 0, inst, 0);
+        Native.SetWindowLongPtr(_hwnd, -8 /* GWLP_HWNDPARENT: sets the owner */, Native.GetShellWindow());
         Native.DragAcceptFiles(_hwnd, 1);
-
-        // Let DWM own the whole surface so pixels we leave at alpha 0 show the acrylic; draw our own corners/border.
-        var margins = new MARGINS { Left = -1, Right = -1, Top = -1, Bottom = -1 };
-        Native.DwmExtendFrameIntoClientArea(_hwnd, ref margins);
-        int v = 1; Native.DwmSetWindowAttribute(_hwnd, 33 /* WINDOW_CORNER_PREFERENCE */, ref v, 4); // DONOTROUND
-        v = unchecked((int)0xFFFFFFFE); Native.DwmSetWindowAttribute(_hwnd, 34 /* BORDER_COLOR */, ref v, 4); // none
-        ApplyAcrylic();
-    }
-
-    private void ApplyAcrylic()
-    {
-        // "acrylic": real acrylic, DWM rounds the corners (fixed system radius). "blur": lighter blur that obeys a
-        // custom corner radius through the window region.
-        _useRegion = _cfg.Backdrop.Equals("blur", StringComparison.OrdinalIgnoreCase);
-        int corner = _useRegion ? 1 /* DONOTROUND */ : 2 /* ROUND */;
-        Native.DwmSetWindowAttribute(_hwnd, 33 /* WINDOW_CORNER_PREFERENCE */, ref corner, 4);
-        uint argb = Config.Color(_cfg.Tint, 0x9E14181C);
-        uint abgr = (argb & 0xFF00FF00) | ((argb & 0xFF) << 16) | ((argb >> 16) & 0xFF);
-        var accent = new ACCENT_POLICY { AccentState = _useRegion ? 3 /* BLURBEHIND */ : 4 /* ACRYLICBLURBEHIND */, AccentFlags = 0, GradientColor = abgr };
-        var data = new WINCOMPATTRDATA { Attrib = 19, pvData = (nint)(&accent), cbData = sizeof(ACCENT_POLICY) };
-        Native.SetWindowCompositionAttribute(_hwnd, ref data);
-    }
-
-    private void SendToBottom()
-    {
-        _allowZ = true;
-        Native.SetWindowPos(_hwnd, Native.HWND_NOTOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
-        Native.SetWindowPos(_hwnd, Native.HWND_BOTTOM, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
-        _allowZ = false;
     }
 
     // ---------------------------------------------------------------- config / slots
 
     private void LoadSlots()
     {
-        foreach (var s in _slots) s.Image?.Dispose();
+        foreach (var s in _slots) { s.Image?.Dispose(); s.Mini?.Dispose(); }
         _slots.Clear();
         foreach (var it in _cfg.Items) _slots.Add(new Slot { Item = it });
     }
@@ -174,9 +157,9 @@ internal sealed unsafe class Widget
     {
         _cfg = Config.Load();
         LoadSlots();
-        ApplyAcrylic();
         ApplyStyle();
         Recompute();
+        RebuildBackdrop();
         Frame();
     }
 
@@ -184,6 +167,17 @@ internal sealed unsafe class Widget
     {
         _lastSave = Environment.TickCount64;
         _cfg.Save();
+    }
+
+    /// <summary>Called by the settings window after it changed a look value.</summary>
+    public void LookChanged(bool blurChanged)
+    {
+        ApplyStyle();
+        Recompute();
+        _backdrop?.SetOpacity(_cfg.Opacity / 100f);
+        if (blurChanged) Native.SetTimer(_hwnd, TimerBackdrop, 70, 0); // sliders fire fast: rebuild once they settle
+        Frame();
+        Native.SetTimer(_hwnd, TimerSave, 500, 0);
     }
 
     private void StartWatcher()
@@ -202,38 +196,56 @@ internal sealed unsafe class Widget
 
     private void Recompute()
     {
-        (_cw, _ch) = DesktopGrid.CellSize();
         uint dpi = Native.GetDpiForWindow(_hwnd);
         _scale = dpi == 0 ? 1f : dpi / 96f;
+        (_cw, _ch) = DesktopGrid.CellSize();
         var primary = default(MONITORINFO); primary.cbSize = (uint)sizeof(MONITORINFO);
         Native.GetMonitorInfo(Native.MonitorFromPoint(default, 1), ref primary);
         _ox = primary.rcWork.Left; _oy = primary.rcWork.Top;
+
+        // Same size as the desktop icons (Explorer's own "icon size" setting, DPI scaled), times the user's multiplier.
+        uint logical = Native.RegDword(@"Software\Microsoft\Windows\Shell\Bags\1\Desktop", "IconSize", out uint v) && v is >= 16 and <= 256 ? v : 48;
+        int px = Math.Max(16, (int)(logical * _scale * _cfg.IconScale));
+        if (px != _iconPx)
+        {
+            _iconPx = px; _miniPx = Math.Max(8, (int)(px * 0.44f));
+            foreach (var s in _slots) { s.Image?.Dispose(); s.Image = null; s.Failed = false; s.Mini?.Dispose(); s.Mini = null; s.MiniFailed = false; }
+        }
         Relayout();
     }
 
-    /// <summary>Cheap path used while dragging: reuses the cached grid, refreshes bounds, anchor and rects.</summary>
+    /// <summary>Reuses the cached grid and refreshes bounds, anchor and rects (cheap enough to run on every drag step).</summary>
     private void Relayout()
     {
-        _tileCells = _cfg.TileCells;
-        int cc = _tileCells * 2;
-        var center = new POINT { X = _ox + (_cfg.X + cc / 2) * _cw, Y = _oy + (_cfg.Y + cc / 2) * _ch };
+        var (cellsW, cellsH) = Layout.CollapsedCells(_cfg.BoxRows, _cw, _ch);
+        var center = new POINT { X = _ox + (_cfg.X + cellsW / 2) * _cw, Y = _oy + (_cfg.Y + cellsH / 2) * _ch };
         var mi = default(MONITORINFO); mi.cbSize = (uint)sizeof(MONITORINFO);
         Native.GetMonitorInfo(Native.MonitorFromPoint(center, 1), ref mi);
+        _monitor = mi.rcMonitor;
         int bx = (int)Math.Ceiling((mi.rcWork.Left - _ox) / (double)_cw), by = (int)Math.Ceiling((mi.rcWork.Top - _oy) / (double)_ch);
         int bw = (int)Math.Floor((mi.rcWork.Right - _ox) / (double)_cw) - bx, bh = (int)Math.Floor((mi.rcWork.Bottom - _oy) / (double)_ch) - by;
-        _bounds = new CellRect(bx, by, Math.Max(bw, cc), Math.Max(bh, cc));
+        _bounds = new CellRect(bx, by, Math.Max(bw, cellsW), Math.Max(bh, cellsH));
 
-        (_cols, _rows) = Layout.TileGrid(_slots.Count, _bounds.W / _tileCells, _bounds.H / _tileCells);
-        _anchor = Layout.Clamp(new CellRect(_cfg.X, _cfg.Y, cc, cc), _bounds);
+        (_cols, _rows) = Layout.TileGrid(_slots.Count, _bounds.W, _bounds.H, _cw, _ch);
+        _anchor = Layout.Clamp(new CellRect(_cfg.X, _cfg.Y, cellsW, cellsH), _bounds);
         _cfg.X = _anchor.X; _cfg.Y = _anchor.Y;
-        _expandedCells = Layout.Expand(_anchor, _cols, _rows, _tileCells, _bounds);
+        _expandedCells = Layout.Expand(_anchor, _cols, _rows, _bounds);
+        _padX = (_expandedCells.W - _cols) / 2;
+        _padY = (_expandedCells.H - _rows) / 2;
         _pa = PixelRect(_anchor);
         _pe = PixelRect(_expandedCells);
 
-        int px = (int)(Math.Min(_tileCells * _cw, _tileCells * _ch) * _cfg.IconRatio);
-        if (px != _iconPx) { _iconPx = px; foreach (var s in _slots) { s.Image?.Dispose(); s.Image = null; s.Failed = false; } }
         EnsureCanvas(_pe.Right - _pe.Left, _pe.Bottom - _pe.Top);
         EnsureFont();
+        if (_backdrop == null || !SameRect(_backdrop.Monitor, _monitor)) RebuildBackdrop();
+    }
+
+    private static bool SameRect(RECT a, RECT b) => a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
+
+    private void RebuildBackdrop()
+    {
+        _backdrop?.Dispose();
+        _backdrop = Backdrop.Build(_monitor, _cfg.Blur, _cfg.Opacity / 100f);
     }
 
     private RECT PixelRect(CellRect c)
@@ -254,35 +266,23 @@ internal sealed unsafe class Widget
 
     private static int Lerp(int a, int b, float t) => (int)MathF.Round(a + (b - a) * t);
     private static float LerpF(float a, float b, float t) => a + (b - a) * t;
-
-    private void ApplyWindow()
-    {
-        RECT r = Current();
-        int w = r.Right - r.Left, h = r.Bottom - r.Top;
-        Native.SetWindowPos(_hwnd, 0, r.Left, r.Top, w, h, Native.SWP_NOZORDER | Native.SWP_NOACTIVATE | Native.SWP_NOCOPYBITS | Native.SWP_NOREDRAW);
-        if (!_useRegion) return;
-        int d = (int)Radius * 2;
-        Native.SetWindowRgn(_hwnd, Native.CreateRoundRectRgn(0, 0, w + 1, h + 1, d, d), 0);
-    }
-
-    private bool _useRegion;
-    private float Radius => (_useRegion ? _cfg.CornerRadius : 8f) * _scale;
+    private float Radius => _cfg.CornerRadius * _scale;
 
     // ---------------------------------------------------------------- tiles
 
     private int ShownCount => Math.Min(_slots.Count, _cols * _rows);
+    private bool Clustered => _slots.Count > Layout.VisibleSlots;
     private int VisibleSlots => _t <= 0.001f ? Layout.VisibleSlots : Math.Max(ShownCount, Layout.VisibleSlots);
 
-    /// <summary>Tile rect in canvas coordinates (origin = expanded window's top-left) at expansion <paramref name="t"/>.</summary>
+    /// <summary>Tile rect in canvas coordinates (origin = expanded rect's top-left) at expansion <paramref name="t"/>.</summary>
     private (float X, float Y, float W, float H) TileRect(int i, float t)
     {
-        int tw = _tileCells * _cw, th = _tileCells * _ch;
-        float ex = _ox + (_expandedCells.X + i % _cols * _tileCells) * _cw - _pe.Left;
-        float ey = _oy + (_expandedCells.Y + i / _cols * _tileCells) * _ch - _pe.Top;
-        if (i >= Layout.VisibleSlots) return (ex, ey, tw, th);
-        float cx = _ox + (_anchor.X + i % 2 * _tileCells) * _cw - _pe.Left;
-        float cy = _oy + (_anchor.Y + i / 2 * _tileCells) * _ch - _pe.Top;
-        return (LerpF(cx, ex, t), LerpF(cy, ey, t), tw, th);
+        float ex = _ox + (_expandedCells.X + _padX + i % _cols) * _cw - _pe.Left;
+        float ey = _oy + (_expandedCells.Y + _padY + i / _cols) * _ch - _pe.Top;
+        if (i >= Layout.VisibleSlots) return (ex, ey, _cw, _ch);
+        float sw = (_pa.Right - _pa.Left) / 2f, sh = (_pa.Bottom - _pa.Top) / 2f;
+        float cx = _pa.Left + i % 2 * sw - _pe.Left, cy = _pa.Top + i / 2 * sh - _pe.Top;
+        return (LerpF(cx, ex, t), LerpF(cy, ey, t), LerpF(sw, _cw, t), LerpF(sh, _ch, t));
     }
 
     private int HitTile(int canvasX, int canvasY)
@@ -293,6 +293,20 @@ internal sealed unsafe class Widget
             if (canvasX >= r.X && canvasX < r.X + r.W && canvasY >= r.Y && canvasY < r.Y + r.H) return i;
         }
         return -1;
+    }
+
+    private (float X, float Y, float S) GearRect()
+    {
+        RECT cur = Current();
+        float s = 18 * _scale, m = 10 * _scale;
+        return (cur.Right - _pe.Left - s - m, cur.Top - _pe.Top + m, s);
+    }
+
+    private bool HitGear(int canvasX, int canvasY)
+    {
+        var g = GearRect();
+        float pad = 6 * _scale;
+        return canvasX >= g.X - pad && canvasX < g.X + g.S + pad && canvasY >= g.Y - pad && canvasY < g.Y + g.S + pad;
     }
 
     // ---------------------------------------------------------------- drawing
@@ -308,7 +322,7 @@ internal sealed unsafe class Widget
         _dib = Native.CreateDIBSection(screen, ref bi, 0, out nint bits, 0, 0);
         Native.ReleaseDC(0, screen);
         Native.SelectObject(_memDc, _dib);
-        // GDI+ draws straight into the DIB's memory as premultiplied ARGB, so alpha reaches DWM intact.
+        // GDI+ draws straight into the DIB's memory as premultiplied ARGB, which is exactly what UpdateLayeredWindow wants.
         Gdip.GdipCreateBitmapFromScan0(w, h, w * 4, Gdip.PixelFormat32bppPARGB, bits, out _bmp);
         Gdip.GdipGetImageGraphicsContext(_bmp, out _g);
         Gdip.GdipSetSmoothingMode(_g, 4);        // anti-alias
@@ -331,7 +345,6 @@ internal sealed unsafe class Widget
         _outlineArgb = Config.Color(_cfg.OutlineColor, 0xFF4CC2FF);
         _hoverArgb = Config.Color(_cfg.HoverColor, 0x2EFFFFFF);
         _labelArgb = Config.Color(_cfg.LabelColor, 0xFFF2F2F2);
-        Gdip.GdipCreateSolidFill(_labelArgb, out _brushLabel);
         Gdip.GdipCreateSolidFill(_hoverArgb, out _brushHover);
         Gdip.GdipCreateFontFamilyFromName(_cfg.FontFamily, 0, out _fontFamily);
         if (_fontFamily == 0) Gdip.GdipCreateFontFamilyFromName("Segoe UI", 0, out _fontFamily);
@@ -339,25 +352,31 @@ internal sealed unsafe class Widget
         Gdip.GdipSetStringFormatAlign(_strFmt, 1);
         Gdip.GdipSetStringFormatLineAlign(_strFmt, 0);
         Gdip.GdipSetStringFormatTrimming(_strFmt, 3); // ellipsis at character
+        Gdip.GdipCreateFontFamilyFromName("Segoe Fluent Icons", 0, out _gearFamily);
+        if (_gearFamily == 0) Gdip.GdipCreateFontFamilyFromName("Segoe MDL2 Assets", 0, out _gearFamily);
         _fontEm = 0;
     }
 
     private void FreeStyle()
     {
         if (_font != 0) { Gdip.GdipDeleteFont(_font); _font = 0; }
+        if (_gearFont != 0) { Gdip.GdipDeleteFont(_gearFont); _gearFont = 0; }
         if (_fontFamily != 0) { Gdip.GdipDeleteFontFamily(_fontFamily); _fontFamily = 0; }
+        if (_gearFamily != 0) { Gdip.GdipDeleteFontFamily(_gearFamily); _gearFamily = 0; }
         if (_strFmt != 0) { Gdip.GdipDeleteStringFormat(_strFmt); _strFmt = 0; }
-        if (_brushLabel != 0) { Gdip.GdipDeleteBrush(_brushLabel); _brushLabel = 0; }
         if (_brushHover != 0) { Gdip.GdipDeleteBrush(_brushHover); _brushHover = 0; }
     }
 
     private void EnsureFont()
     {
-        float em = MathF.Max(8f, MathF.Min(_tileCells * _cw, _tileCells * _ch) * _cfg.LabelSize);
+        float em = MathF.Max(8f, _cfg.LabelSize * _scale);
         if (_font != 0 && MathF.Abs(em - _fontEm) < 0.5f) return;
         if (_font != 0) Gdip.GdipDeleteFont(_font);
         Gdip.GdipCreateFont(_fontFamily, em, 0, 2 /* pixel */, out _font);
         _fontEm = em;
+        if (_gearFont != 0) Gdip.GdipDeleteFont(_gearFont);
+        _gearFont = 0;
+        if (_gearFamily != 0) Gdip.GdipCreateFont(_gearFamily, 16 * _scale, 0, 2, out _gearFont);
     }
 
     private static nint RoundRect(float x, float y, float w, float h, float r)
@@ -373,15 +392,49 @@ internal sealed unsafe class Widget
         return p;
     }
 
+    private static uint WithAlpha(uint argb, float a) => ((uint)(Math.Clamp(a, 0f, 1f) * (argb >> 24)) << 24) | (argb & 0xFFFFFF);
+
+    /// <summary>Draws an icon scaled to a square, optionally translucent. Full-size icons are 1:1 so they skip filtering.</summary>
+    private void DrawIcon(IconImage img, float x, float y, float size, float alpha, bool smooth = false)
+    {
+        if (alpha <= 0.01f) return;
+        Gdip.GdipSetInterpolationMode(_g, smooth ? 6 : 5);
+        nint attrs = 0;
+        float* m = stackalloc float[25];
+        if (alpha < 0.99f)
+        {
+            for (int k = 0; k < 25; k++) m[k] = 0;
+            m[0] = m[6] = m[12] = m[24] = 1f; m[18] = alpha;
+            Gdip.GdipCreateImageAttributes(out attrs);
+            Gdip.GdipSetImageAttributesColorMatrix(attrs, 1, 1, m, null, 0);
+        }
+        Gdip.GdipDrawImageRectRectI(_g, img.Bitmap, (int)MathF.Round(x), (int)MathF.Round(y), (int)MathF.Round(size), (int)MathF.Round(size),
+            0, 0, img.Width, img.Height, 2, attrs, 0, 0);
+        if (attrs != 0) Gdip.GdipDisposeImageAttributes(attrs);
+    }
+
     private void Render()
     {
         if (_g == 0) return;
         Gdip.GdipGraphicsClear(_g, 0);
         RECT cur = Current();
         float cx = cur.Left - _pe.Left, cy = cur.Top - _pe.Top, cwid = cur.Right - cur.Left, chei = cur.Bottom - cur.Top;
-        float radius = Radius;
+        float radius = MathF.Min(Radius, MathF.Min(cwid, chei) / 2);
 
-        // outline, inset so the stroke stays inside the rounded window region
+        // background: blurred wallpaper, then the tint on top (its alpha is the opacity)
+        nint bg = RoundRect(cx, cy, cwid, chei, radius);
+        if (_backdrop != null)
+        {
+            _backdrop.Place(_pe.Left, _pe.Top);
+            Gdip.GdipSetInterpolationMode(_g, 6);
+            Gdip.GdipFillPath(_g, _backdrop.Brush, bg);
+            Gdip.GdipSetInterpolationMode(_g, 7);
+        }
+        Gdip.GdipCreateSolidFill(WithAlpha(Config.Color(_cfg.Tint, 0x8C14181C), _cfg.Opacity / 100f), out nint tint);
+        Gdip.GdipFillPath(_g, tint, bg);
+        Gdip.GdipDeleteBrush(tint);
+        Gdip.GdipDeletePath(bg);
+
         float ow = MathF.Max(0f, _cfg.OutlineWidth * _scale);
         if (ow > 0)
         {
@@ -396,15 +449,17 @@ internal sealed unsafe class Widget
         for (int i = 0; i < visible; i++)
         {
             var r = TileRect(i, _t);
-            if (i >= _slots.Count) { DrawEmptySlot(r); continue; }
-            DrawTile(i, r);
+            if (i >= _slots.Count) DrawEmptySlot(r, 1f - _t);
+            else DrawTile(i, r);
         }
+        DrawGear();
     }
 
-    private void DrawEmptySlot((float X, float Y, float W, float H) r)
+    private void DrawEmptySlot((float X, float Y, float W, float H) r, float alpha)
     {
-        float s = MathF.Min(r.W, r.H) * 0.12f, mx = r.X + r.W / 2, my = r.Y + r.H / 2;
-        Gdip.GdipCreatePen1((_outlineArgb & 0x00FFFFFF) | 0x50000000, MathF.Max(1.5f, 2f * _scale), 2, out nint pen);
+        if (alpha <= 0.01f) return;
+        float s = MathF.Min(r.W, r.H) * 0.1f, mx = r.X + r.W / 2, my = r.Y + r.H / 2;
+        Gdip.GdipCreatePen1(WithAlpha(_outlineArgb, 0.3f * alpha), MathF.Max(1.5f, 2f * _scale), 2, out nint pen);
         Gdip.GdipDrawLine(_g, pen, mx - s, my, mx + s, my);
         Gdip.GdipDrawLine(_g, pen, mx, my - s, mx, my + s);
         Gdip.GdipDeletePen(pen);
@@ -412,71 +467,132 @@ internal sealed unsafe class Widget
 
     private void DrawTile(int i, (float X, float Y, float W, float H) r)
     {
+        var slot = _slots[i];
         if (i == _hover)
         {
-            float inset = 6 * _scale;
-            nint hp = RoundRect(r.X + inset, r.Y + inset, r.W - inset * 2, r.H - inset * 2, Radius * 0.6f);
+            float inset = 4 * _scale;
+            nint hp = RoundRect(r.X + inset, r.Y + inset, r.W - inset * 2, r.H - inset * 2, MathF.Min(Radius * 0.5f, 14 * _scale));
             Gdip.GdipFillPath(_g, _brushHover, hp);
             Gdip.GdipDeletePath(hp);
         }
 
-        float labelH = _cfg.ShowLabels ? _fontEm * 1.5f : 0;
-        float iconTop = r.Y + (r.H - _iconPx - labelH) / 2;
-        float iconLeft = r.X + (r.W - _iconPx) / 2;
-        var img = GetImage(_slots[i]);
-        if (img != 0) Gdip.GdipDrawImageRectI(_g, img, (int)iconLeft, (int)iconTop, _iconPx, _iconPx);
-        else
+        float labelH = _cfg.ShowLabels ? _fontEm * 1.5f * _t : 0;
+        float top = r.Y + (r.H - _iconPx - labelH) / 2, left = r.X + (r.W - _iconPx) / 2;
+        bool cluster = i == Layout.VisibleSlots - 1 && Clustered;
+
+        if (cluster) DrawCluster(i, left, top, 1f - _t);
+        float bigAlpha = cluster ? _t : (i < Layout.VisibleSlots ? 1f : _t);
+        var img = GetImage(slot);
+        if (img != null) DrawIcon(img, left, top, _iconPx, bigAlpha);
+        else if (bigAlpha > 0.05f)
         {
-            nint ph = RoundRect(iconLeft, iconTop, _iconPx, _iconPx, _iconPx * 0.22f);
+            nint ph = RoundRect(left, top, _iconPx, _iconPx, _iconPx * 0.22f);
             Gdip.GdipFillPath(_g, _brushHover, ph);
             Gdip.GdipDeletePath(ph);
         }
 
-        if (_cfg.ShowLabels)
+        if (_cfg.ShowLabels && _t > 0.02f)
         {
-            var rc = new RectF { X = r.X + 6 * _scale, Y = iconTop + _iconPx + 3 * _scale, Width = r.W - 12 * _scale, Height = labelH };
-            string name = _slots[i].Item.DisplayName;
-            Gdip.GdipDrawString(_g, name, name.Length, _font, rc, _strFmt, _brushLabel);
+            Gdip.GdipCreateSolidFill(WithAlpha(_labelArgb, _t), out nint brush);
+            var rc = new RectF { X = r.X + 4 * _scale, Y = top + _iconPx + 3 * _scale, Width = r.W - 8 * _scale, Height = _fontEm * 1.6f };
+            string name = slot.Item.DisplayName;
+            Gdip.GdipDrawString(_g, name, name.Length, _font, rc, _strFmt, brush);
+            Gdip.GdipDeleteBrush(brush);
         }
     }
 
-    private nint GetImage(Slot s)
+    /// <summary>The "folder" look of the 4th slot: a mini 2x2 preview of the items that did not fit.</summary>
+    private void DrawCluster(int firstIndex, float left, float top, float alpha)
+    {
+        if (alpha <= 0.01f) return;
+        float gap = _iconPx * 0.08f, mini = (_iconPx - gap) / 2f;
+        for (int k = 0; k < 4 && firstIndex + k < _slots.Count; k++)
+        {
+            var mi = GetMini(_slots[firstIndex + k]);
+            if (mi == null) continue;
+            DrawIcon(mi, left + k % 2 * (mini + gap), top + k / 2 * (mini + gap), mini, alpha, smooth: true);
+        }
+    }
+
+    private void DrawGear()
+    {
+        if (_gearFont == 0) return;
+        var g = GearRect();
+        uint color = WithAlpha(_labelArgb, _hoverGear ? 0.95f : (_inside ? 0.55f : 0.28f));
+        Gdip.GdipCreateSolidFill(color, out nint brush);
+        var rc = new RectF { X = g.X - 4 * _scale, Y = g.Y - 2 * _scale, Width = g.S + 8 * _scale, Height = g.S + 6 * _scale };
+        Gdip.GdipDrawString(_g, "", 1, _gearFont, rc, _strFmt, brush);
+        Gdip.GdipDeleteBrush(brush);
+    }
+
+    private bool _inside;
+
+    private IconImage? GetImage(Slot s)
     {
         if (s.Image == null && !s.Failed)
         {
             s.Image = IconImage.Load(s.Item.Path, Math.Max(16, _iconPx));
             s.Failed = s.Image == null;
         }
-        return s.Image?.Bitmap ?? 0;
+        return s.Image;
     }
 
+    private IconImage? GetMini(Slot s)
+    {
+        if (s.Mini == null && !s.MiniFailed)
+        {
+            s.Mini = IconImage.Load(s.Item.Path, Math.Max(16, _miniPx));
+            s.MiniFailed = s.Mini == null;
+        }
+        return s.Mini;
+    }
+
+    /// <summary>Loads every visible icon ahead of time so expanding never waits on the shell.</summary>
+    private void Preload()
+    {
+        for (int i = 0; i < ShownCount; i++) GetImage(_slots[i]);
+    }
+
+    /// <summary>Drops icons that are only needed while expanded.</summary>
+    private void UnloadHidden()
+    {
+        int keep = Clustered ? Layout.VisibleSlots - 1 : Layout.VisibleSlots;
+        for (int i = keep; i < _slots.Count; i++) { _slots[i].Image?.Dispose(); _slots[i].Image = null; _slots[i].Failed = false; }
+    }
+
+    /// <summary>Moves, resizes and repaints the window in a single call, so animation never tears.</summary>
     private void Present()
     {
         if (_memDc == 0) return;
         RECT cur = Current();
-        nint dc = Native.GetDC(_hwnd);
-        Native.BitBlt(dc, 0, 0, cur.Right - cur.Left, cur.Bottom - cur.Top, _memDc, cur.Left - _pe.Left, cur.Top - _pe.Top, Native.SRCCOPY);
-        Native.ReleaseDC(_hwnd, dc);
+        var size = new SIZE { cx = cur.Right - cur.Left, cy = cur.Bottom - cur.Top };
+        var dst = new POINT { X = cur.Left, Y = cur.Top };
+        var src = new POINT { X = cur.Left - _pe.Left, Y = cur.Top - _pe.Top };
+        var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = 255, AlphaFormat = 1 /* AC_SRC_ALPHA */ };
+        Native.UpdateLayeredWindow(_hwnd, 0, &dst, &size, _memDc, &src, 0, &blend, 2 /* ULW_ALPHA */);
     }
 
-    private void Frame() { ApplyWindow(); Render(); Present(); }
+    private void Frame() { Render(); Present(); }
 
     // ---------------------------------------------------------------- expand / collapse
 
     private void StartAnim(int target)
     {
-        if (_target == target && !(_t > 0f && _t < 1f)) { if (_t == target) return; }
         _target = target;
         _animFrom = _t;
         _animStart = Environment.TickCount64;
         if (_cfg.AnimationMs <= 0) { _t = target; Frame(); FinishAnim(); return; }
-        Native.SetTimer(_hwnd, TimerAnim, 10, 0);
+        Native.SetTimer(_hwnd, TimerAnim, 8, 0);
     }
 
     private void Expand()
     {
         if (_target == 1) return;
+        Preload();
+        // Pop above the other windows while open, then take the keyboard so Esc and click-away (deactivation) can close it.
+        _allowZ = true;
         Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        _allowZ = false;
         Native.SetForegroundWindow(_hwnd);
         StartAnim(1);
     }
@@ -485,6 +601,15 @@ internal sealed unsafe class Widget
     {
         if (_target == 0) return;
         StartAnim(0);
+    }
+
+    /// <summary>Back to the desktop layer: just above the desktop window (the owner), below every app.</summary>
+    private void SendToBottom()
+    {
+        _allowZ = true;
+        Native.SetWindowPos(_hwnd, Native.HWND_NOTOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        Native.SetWindowPos(_hwnd, Native.HWND_BOTTOM, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        _allowZ = false;
     }
 
     private void AnimTick()
@@ -501,10 +626,9 @@ internal sealed unsafe class Widget
         if (_target != 0) return;
         _hover = -1;
         SendToBottom();
-        // Hidden icons are not needed while collapsed: give their memory back.
-        for (int i = Layout.VisibleSlots; i < _slots.Count; i++) { _slots[i].Image?.Dispose(); _slots[i].Image = null; _slots[i].Failed = false; }
-        Render(); Present();
-        Native.EmptyWorkingSet(Native.GetCurrentProcess());
+        UnloadHidden();
+        Frame();
+        Trim();
     }
 
     // ---------------------------------------------------------------- actions
@@ -519,7 +643,7 @@ internal sealed unsafe class Widget
     {
         bool tileHit = _downTile >= 0 && _downTile < _slots.Count;
         if (_target == 1) { if (tileHit) { Launch(_downTile); Collapse(); } return; }
-        if (_slots.Count > Layout.VisibleSlots) { Expand(); return; }
+        if (Clustered) { Expand(); return; }
         if (tileHit) Launch(_downTile);
     }
 
@@ -531,8 +655,7 @@ internal sealed unsafe class Widget
             uint len = Native.DragQueryFile(drop, k, null, 0);
             var buf = new char[len + 1];
             fixed (char* p = buf) Native.DragQueryFile(drop, k, p, len + 1);
-            string path = new string(buf, 0, (int)len);
-            var item = new Item { Path = path };
+            var item = new Item { Path = new string(buf, 0, (int)len) };
             _cfg.Items.Add(item);
             _slots.Add(new Slot { Item = item });
         }
@@ -546,6 +669,7 @@ internal sealed unsafe class Widget
     {
         Native.GetCursorPos(out POINT pt);
         nint menu = Native.CreatePopupMenu();
+        Native.AppendMenu(menu, 0, 5, "Settings...");
         Native.AppendMenu(menu, 0, 1, "Reload config");
         Native.AppendMenu(menu, 0, 2, "Open config file");
         if (tile >= 0 && tile < _slots.Count)
@@ -562,7 +686,7 @@ internal sealed unsafe class Widget
             case 1: ReloadConfig(); break;
             case 2: Native.ShellExecute(_hwnd, "open", Config.FilePath, null, null, 1); break;
             case 3:
-                _slots[tile].Image?.Dispose();
+                _slots[tile].Image?.Dispose(); _slots[tile].Mini?.Dispose();
                 _cfg.Items.RemoveAt(tile);
                 _slots.RemoveAt(tile);
                 SaveConfig();
@@ -570,10 +694,14 @@ internal sealed unsafe class Widget
                 Frame();
                 break;
             case 4: Native.PostQuitMessage(0); break;
+            case 5: SettingsWindow.Show(this); break;
         }
     }
 
     // ---------------------------------------------------------------- messages
+
+    private int CanvasX(nint lp) => (short)(lp & 0xFFFF) + Current().Left - _pe.Left;
+    private int CanvasY(nint lp) => (short)((lp >> 16) & 0xFFFF) + Current().Top - _pe.Top;
 
     private nint WndProc(nint h, uint msg, nint wp, nint lp)
     {
@@ -581,24 +709,16 @@ internal sealed unsafe class Widget
         {
             case Native.WM_ERASEBKGND: return 1;
 
-            case Native.WM_PAINT:
-            {
-                byte* ps = stackalloc byte[72];
-                Native.BeginPaint(h, (nint)ps);
-                Present();
-                Native.EndPaint(h, (nint)ps);
-                return 0;
-            }
-
             case Native.WM_MOUSEACTIVATE:
-                return _target == 0 ? 3 /* MA_NOACTIVATE: clicking must not raise it above other windows */ : 1;
+                // Collapsed: a click must not raise the widget above other windows. Expanded: take focus (Esc, click-away).
+                return _target == 0 ? 3 /* MA_NOACTIVATE */ : 1;
 
             case Native.WM_WINDOWPOSCHANGING:
                 if (_target == 0 && !_allowZ && _t == 0f) ((WINDOWPOS*)lp)->flags |= Native.SWP_NOZORDER;
                 break;
 
             case Native.WM_ACTIVATE:
-                if ((wp & 0xFFFF) == 0 && !_inMenu) Collapse();
+                if ((wp & 0xFFFF) == 0 && !_inMenu) Collapse(); // lost focus: clicked elsewhere
                 return 0;
 
             case Native.WM_KEYDOWN:
@@ -609,7 +729,9 @@ internal sealed unsafe class Widget
             {
                 _pressed = true; _dragging = false;
                 Native.GetCursorPos(out _downPt);
-                _downTile = HitTile(CanvasX(lp), CanvasY(lp));
+                int cx = CanvasX(lp), cy = CanvasY(lp);
+                _downGear = HitGear(cx, cy);
+                _downTile = HitTile(cx, cy);
                 Native.SetCapture(h);
                 return 0;
             }
@@ -619,7 +741,7 @@ internal sealed unsafe class Widget
                 if (_pressed)
                 {
                     Native.GetCursorPos(out POINT now);
-                    if (!_dragging && _target == 0 && _t == 0f
+                    if (!_dragging && !_downGear && _target == 0 && _t == 0f
                         && Math.Abs(now.X - _downPt.X) + Math.Abs(now.Y - _downPt.Y) >= (int)(4 * _scale))
                     {
                         _dragging = true;
@@ -630,21 +752,28 @@ internal sealed unsafe class Widget
                     if (_dragging) DragTo(now);
                     return 0;
                 }
-                if (!_tracking)
+                bool entered = !_tracking;
+                if (entered)
                 {
                     var tme = new TRACKMOUSEEVENT { cbSize = (uint)sizeof(TRACKMOUSEEVENT), dwFlags = 2 /* LEAVE */, hwndTrack = h };
                     Native.TrackMouseEvent(ref tme);
                     _tracking = true;
+                    _inside = true;
+                    if (_target == 0) Preload(); // hover precedes the click: icons are ready before the animation starts
                 }
                 int hit = HitTile(CanvasX(lp), CanvasY(lp));
                 if (hit >= _slots.Count) hit = -1;
-                if (hit != _hover) { _hover = hit; Render(); Present(); }
+                bool gear = HitGear(CanvasX(lp), CanvasY(lp));
+                if (gear) hit = -1;
+                if (entered || hit != _hover || gear != _hoverGear) { _hover = hit; _hoverGear = gear; Frame(); }
                 return 0;
             }
 
             case Native.WM_MOUSELEAVE:
-                _tracking = false;
-                if (_hover != -1) { _hover = -1; Render(); Present(); }
+                _tracking = false; _inside = false; _hoverGear = false;
+                _hover = -1;
+                if (_target == 0 && _t == 0f) UnloadHidden();
+                Frame();
                 return 0;
 
             case Native.WM_LBUTTONUP:
@@ -652,7 +781,9 @@ internal sealed unsafe class Widget
                 bool wasDrag = _dragging;
                 _pressed = false; _dragging = false;
                 Native.ReleaseCapture();
-                if (wasDrag) SaveConfig(); else Click();
+                if (wasDrag) SaveConfig();
+                else if (_downGear && HitGear(CanvasX(lp), CanvasY(lp))) SettingsWindow.Show(this);
+                else Click();
                 return 0;
             }
 
@@ -671,6 +802,8 @@ internal sealed unsafe class Widget
             case Native.WM_TIMER:
                 if ((nuint)wp == TimerAnim) AnimTick();
                 else if ((nuint)wp == TimerReload) { Native.KillTimer(h, TimerReload); ReloadConfig(); }
+                else if ((nuint)wp == TimerBackdrop) { Native.KillTimer(h, TimerBackdrop); RebuildBackdrop(); Frame(); Trim(); }
+                else if ((nuint)wp == TimerSave) { Native.KillTimer(h, TimerSave); SaveConfig(); }
                 return 0;
 
             case WM_CONFIG_CHANGED:
@@ -679,7 +812,13 @@ internal sealed unsafe class Widget
 
             case Native.WM_DISPLAYCHANGE:
             case Native.WM_SETTINGCHANGE:
-                if (_target == 0) { Recompute(); Frame(); }
+                if (_target == 0)
+                {
+                    Recompute();
+                    if (msg == Native.WM_DISPLAYCHANGE || wp == 0x14 /* SPI_SETDESKWALLPAPER */) RebuildBackdrop();
+                    Frame();
+                    Trim();
+                }
                 return 0;
 
             case Native.WM_DESTROY:
@@ -689,17 +828,12 @@ internal sealed unsafe class Widget
         return Native.DefWindowProc(h, msg, wp, lp);
     }
 
-    private int CanvasX(nint lp) => (short)(lp & 0xFFFF) + Current().Left - _pe.Left;
-    private int CanvasY(nint lp) => (short)((lp >> 16) & 0xFFFF) + Current().Top - _pe.Top;
-
     private void DragTo(POINT cursor)
     {
         int gap = (int)(_cfg.Gap * _scale);
         _cfg.X = (int)Math.Round((cursor.X - _grab.X - gap - _ox) / (double)_cw);
         _cfg.Y = (int)Math.Round((cursor.Y - _grab.Y - gap - _oy) / (double)_ch);
         Relayout();
-        ApplyWindow();
-        Render();
-        Present();
+        Frame();
     }
 }

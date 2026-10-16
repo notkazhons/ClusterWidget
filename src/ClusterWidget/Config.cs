@@ -31,27 +31,30 @@ internal sealed class Config
     /// <summary>Top-left grid cell of the widget (desktop-icon cells, from the work-area corner).</summary>
     public int X { get; set; } = 1;
     public int Y { get; set; } = 1;
-    /// <summary>Cells per tile side. The collapsed widget is 2 tiles wide, so 2 gives the 4x4-cell footprint.</summary>
-    public int TileCells { get; set; } = 2;
-    /// <summary>"acrylic" (true acrylic, system-fixed 8px corners) or "blur" (lighter blur, honors cornerRadius).</summary>
-    public string Backdrop { get; set; } = "acrylic";
-    /// <summary>Tint painted over the blur (alpha = how much color covers it).</summary>
-    public string Tint { get; set; } = "#9E14181C";
+    /// <summary>Cell rows of the collapsed box (the width follows from the cell shape so it looks square).</summary>
+    public int BoxRows { get; set; } = 2;
+    /// <summary>Opacity of the whole square (blur + tint), 0-100. Lower it to see the desktop through the box.</summary>
+    public int Opacity { get; set; } = 100;
+    /// <summary>Color painted over the blur; its alpha is the tint strength.</summary>
+    public string Tint { get; set; } = "#8C14181C";
+    /// <summary>Blur radius in pixels (0 = sharp wallpaper).</summary>
+    public int Blur { get; set; } = 24;
     public string OutlineColor { get; set; } = "#FF4CC2FF";
     /// <summary>Pixels at 100% scaling.</summary>
     public float OutlineWidth { get; set; } = 2f;
-    public float CornerRadius { get; set; } = 26f;
-    /// <summary>Space kept between the widget edge and the cell border, so neighbours do not touch.</summary>
+    /// <summary>Pixels at 100% scaling; any value works (half the shorter side makes a pill).</summary>
+    public float CornerRadius { get; set; } = 40f;
+    /// <summary>Space kept between the box edge and the cell border, so neighbours do not touch.</summary>
     public float Gap { get; set; } = 4f;
-    /// <summary>Icon size as a fraction of the tile's shorter side.</summary>
-    public float IconRatio { get; set; } = 0.46f;
+    /// <summary>Multiplier on the Windows desktop icon size.</summary>
+    public float IconScale { get; set; } = 1f;
     public bool ShowLabels { get; set; } = true;
     public string LabelColor { get; set; } = "#FFF2F2F2";
-    /// <summary>Label font size as a fraction of the tile's shorter side.</summary>
-    public float LabelSize { get; set; } = 0.11f;
+    /// <summary>Label font size in pixels at 100% scaling.</summary>
+    public float LabelSize { get; set; } = 12f;
     public string FontFamily { get; set; } = "Segoe UI";
     public string HoverColor { get; set; } = "#2EFFFFFF";
-    public int AnimationMs { get; set; } = 180;
+    public int AnimationMs { get; set; } = 160;
     public List<Item> Items { get; set; } = new();
 
     public static string Dir => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ClusterWidget");
@@ -83,11 +86,23 @@ internal sealed class Config
         catch (Exception) { /* read-only profile etc.: settings simply do not persist */ }
     }
 
+    /// <summary>Restores the look (not position or items) to the shipped defaults.</summary>
+    public void ResetLook()
+    {
+        var d = new Config();
+        BoxRows = d.BoxRows; Opacity = d.Opacity; Tint = d.Tint; Blur = d.Blur; OutlineColor = d.OutlineColor; OutlineWidth = d.OutlineWidth;
+        CornerRadius = d.CornerRadius; IconScale = d.IconScale; ShowLabels = d.ShowLabels;
+    }
+
     private void Sanitize()
     {
-        TileCells = Math.Clamp(TileCells, 1, 4);
-        IconRatio = Math.Clamp(IconRatio, 0.1f, 0.9f);
-        LabelSize = Math.Clamp(LabelSize, 0.05f, 0.3f);
+        BoxRows = Math.Clamp(BoxRows, 2, 8);
+        Blur = Math.Clamp(Blur, 0, 100);
+        Opacity = Math.Clamp(Opacity, 0, 100);
+        OutlineWidth = Math.Clamp(OutlineWidth, 0f, 20f);
+        CornerRadius = Math.Clamp(CornerRadius, 0f, 200f);
+        IconScale = Math.Clamp(IconScale, 0.3f, 3f);
+        LabelSize = Math.Clamp(LabelSize, 6f, 32f);
         AnimationMs = Math.Clamp(AnimationMs, 0, 2000);
         Items ??= new();
     }
@@ -100,6 +115,8 @@ internal sealed class Config
         if (!uint.TryParse(h, System.Globalization.NumberStyles.HexNumber, null, out uint v)) return fallback;
         return h.Length switch { 6 => 0xFF000000u | v, 8 => v, _ => fallback };
     }
+
+    public static string ColorText(uint argb) => "#" + argb.ToString("X8");
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
