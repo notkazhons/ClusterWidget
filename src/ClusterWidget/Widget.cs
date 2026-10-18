@@ -875,6 +875,15 @@ internal sealed unsafe class Widget
         Frame();
     }
 
+    /// <summary>Removes every icon (the files and programs themselves are not touched).</summary>
+    public void ClearItems()
+    {
+        _cfg.Items.Clear(); _slots.Clear();
+        SaveNow();
+        Recompute();
+        Frame();
+    }
+
     /// <summary>Puts the closed box in the middle of the primary monitor's work area.</summary>
     public void CenterOnScreen()
     {

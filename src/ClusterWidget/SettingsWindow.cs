@@ -166,7 +166,11 @@ internal sealed unsafe class SettingsWindow
         nint owner = _open?._hwnd ?? 0;
         if (App.Widgets.Count <= 1)
         {
-            Native.MessageBox(owner, "This is the only cluster, so it can't be deleted. Create another one first.", "Delete cluster", 0x40 /* MB_ICONINFORMATION */);
+            // the app always keeps one cluster, so deleting it empties it instead
+            if (Native.MessageBox(owner, $"This is the only cluster, so it stays, but all {w.Cfg.Items.Count} of its icons will be removed.\n\nThe files and programs themselves are not touched.",
+                    "Delete cluster", 0x1 | 0x30 | 0x100 /* OKCANCEL | EXCLAMATION | DEFBUTTON2 */) != 1) return;
+            w.ClearItems();
+            Refresh();
             return;
         }
         if (Native.MessageBox(owner, $"Delete the cluster \"{w.Cfg.Name}\" and its list of icons?\n\nThe files and programs themselves are not touched.",
