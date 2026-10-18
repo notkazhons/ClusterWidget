@@ -279,20 +279,28 @@ internal static class Designs
         return System.IO.Path.Combine(Config.DesignsDir, safe + ".json");
     }
 
+    /// <summary>Designs that ship with the app. They are listed first and can be applied, but not overwritten or deleted.</summary>
+    public static readonly string[] BuiltIn = { "Black & Pink", "Frosted White" };
+
+    public static bool IsBuiltIn(string name) => BuiltIn.Any(n => n.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
+
     public static string[] List()
     {
         try
         {
-            if (!Directory.Exists(Config.DesignsDir)) return Array.Empty<string>();
-            return Directory.GetFiles(Config.DesignsDir, "*.json").Select(System.IO.Path.GetFileNameWithoutExtension).OfType<string>().OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray();
+            var own = Directory.Exists(Config.DesignsDir)
+                ? Directory.GetFiles(Config.DesignsDir, "*.json").Select(System.IO.Path.GetFileNameWithoutExtension).OfType<string>().Where(n => !IsBuiltIn(n)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                : Enumerable.Empty<string>();
+            return BuiltIn.Concat(own).ToArray();
         }
-        catch (Exception) { return Array.Empty<string>(); }
+        catch (Exception) { return BuiltIn; }
     }
 
-    public static bool Exists(string name) => File.Exists(FileFor(name));
+    public static bool Exists(string name) => IsBuiltIn(name) || File.Exists(FileFor(name));
 
     public static void Save(string name, Config source)
     {
+        if (IsBuiltIn(name)) return;
         var copy = source.Clone();
         copy.Items = new();
         copy.Name = name;
@@ -300,10 +308,47 @@ internal static class Designs
         File.WriteAllText(FileFor(name), JsonSerializer.Serialize(copy, ConfigJson.Default.Config));
     }
 
-    public static Config? Load(string name) => Config.Load(FileFor(name));
+    public static Config? Load(string name) => IsBuiltIn(name) ? Preset(name) : Config.Load(FileFor(name));
+
+    private static Config Preset(string name)
+    {
+        if (name.Trim().Equals("Frosted White", StringComparison.OrdinalIgnoreCase))
+            return new Config
+            {
+                Name = name, Opacity = 40, Tint = "#80FFFFFF", Blur = 45, CornerRadius = 30f,
+                OutlineColor = "#FFFFFFFF", OutlineOpacity = 55, OutlineWidth = 1f,
+                LabelColor = "#FFFFFFFF", HoverColor = "#26FFFFFF",
+            };
+        return new Config
+        {
+            Name = name, ClosedCount = 6, IconScale = 0.86f, ClosedPadding = 23f, ClosedGap = 16f, OpenPadding = 16f, OpenGap = 15f,
+            Opacity = 63, Tint = "#8CFFFFFF", Blur = 24, CornerRadius = 27f,
+            OutlineColor = "#FF57023C", OutlineOpacity = 36, OutlineWidth = 2f,
+            BackgroundImage = ExtractPicture("blacknpink-glow.png"), ImageZoom = 134, ImagePanX = 100, ImagePanY = 50,
+            GearCorner = "bottomRight", GearSize = 15, GearOffsetX = 14, GearOffsetY = 11,
+        };
+    }
+
+    /// <summary>Writes a picture bundled in the exe to the pictures folder (once) and returns its path, or "" if that fails.</summary>
+    private static string ExtractPicture(string file)
+    {
+        try
+        {
+            string dst = System.IO.Path.Combine(Config.PicturesDir, file);
+            if (File.Exists(dst)) return dst;
+            using var src = typeof(Designs).Assembly.GetManifestResourceStream("ClusterWidget.presets." + file);
+            if (src == null) return "";
+            Directory.CreateDirectory(Config.PicturesDir);
+            using var o = File.Create(dst);
+            src.CopyTo(o);
+            return dst;
+        }
+        catch (Exception) { return ""; }
+    }
 
     public static void Delete(string name)
     {
+        if (IsBuiltIn(name)) return;
         try { File.Delete(FileFor(name)); } catch (Exception) { /* already gone */ }
     }
 }

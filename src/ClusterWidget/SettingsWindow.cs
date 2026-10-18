@@ -741,6 +741,11 @@ internal sealed unsafe class SettingsWindow
     {
         string? name = TextPrompt.Ask(_hwnd, "Save design", "Name for this design:", SelectedDesign() ?? "My design");
         if (name == null) return;
+        if (Designs.IsBuiltIn(name))
+        {
+            Native.MessageBox(_hwnd, $"\"{name}\" is a built-in design and can't be replaced. Pick another name.", "Save design", 0x40);
+            return;
+        }
         if (Designs.Exists(name) &&
             Native.MessageBox(_hwnd, $"A design called \"{name}\" already exists. Replace it?", "Save design", 0x4 | 0x20 | 0x100) != 6) return;
         Designs.Save(name, _w.Cfg);
@@ -762,6 +767,11 @@ internal sealed unsafe class SettingsWindow
         if (name == null)
         {
             Native.MessageBox(_hwnd, "Pick a saved design in the box first, then press Delete.", "Delete design", 0x40);
+            return;
+        }
+        if (Designs.IsBuiltIn(name))
+        {
+            Native.MessageBox(_hwnd, $"\"{name}\" is a built-in design and can't be deleted.", "Delete design", 0x40);
             return;
         }
         if (Native.MessageBox(_hwnd, $"Delete the saved design \"{name}\"?", "Delete design", 0x4 | 0x30 | 0x100) != 6) return;

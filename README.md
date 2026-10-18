@@ -98,7 +98,8 @@ last Apply.
 - **About:** how everything works, built into the app.
 
 A **design** is a saved look and layout (not icons or position). Save one with *Save as...* at the top and apply it to
-any cluster. *Use this look as my default* makes it the starting look of new clusters and what *Reset* returns to.
+any cluster. Two designs ship with the app, *Black & Pink* and *Frosted White* (a thin white outline over a low-opacity blur); they
+appear first in the design list and can't be overwritten or deleted. *Use this look as my default* makes it the starting look of new clusters and what *Reset* returns to.
 
 ## Your files
 

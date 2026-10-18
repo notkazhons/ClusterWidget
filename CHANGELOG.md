@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Two built-in designs, *Black & Pink* and *Frosted White*, in the design list.
+- Deleting the only cluster now removes all of its icons instead of being refused.
 - Keyboard navigation: Tab from the desktop enters the clusters, Tab / Shift+Tab / arrows move between icons, Enter opens the focused app, Esc returns to the desktop. A keyboard hook is only installed while the desktop is in front.
 
 ## [1.0.0] - 2026-10-16
