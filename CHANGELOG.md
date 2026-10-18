@@ -5,6 +5,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-18
+
 ### Added
 - Two built-in designs, *Black & Pink* and *Frosted White*, in the design list.
 - Deleting the only cluster now removes all of its icons instead of being refused.
