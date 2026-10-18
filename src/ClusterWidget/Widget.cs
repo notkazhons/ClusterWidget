@@ -37,7 +37,7 @@ internal static class DesktopGrid
 /// </summary>
 internal sealed unsafe class Widget
 {
-    private const nuint TimerAnim = 1, TimerBackdrop = 3, TimerSave = 4, TimerPreload = 5, TimerTip = 6;
+    private const nuint TimerAnim = 1, TimerBackdrop = 3, TimerSave = 4, TimerPreload = 5, TimerTip = 6, TimerReveal = 7;
 
     private sealed class Slot
     {
@@ -1088,6 +1088,16 @@ internal sealed unsafe class Widget
         StartAnim(0);
     }
 
+    /// <summary>Lifts the closed box above the other windows for a few seconds, so it can be found when apps cover the desktop.</summary>
+    public void Reveal()
+    {
+        if (_target == 1 || _dead) return;
+        _allowZ = true;
+        Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        _allowZ = false;
+        Native.SetTimer(_hwnd, TimerReveal, 4000, 0);
+    }
+
     /// <summary>Back to the desktop layer: just above the desktop window (the owner), below every app.</summary>
     private void SendToBottom()
     {
@@ -1439,6 +1449,7 @@ internal sealed unsafe class Widget
                 else if ((nuint)wp == TimerTip) ShowTip();
                 else if ((nuint)wp == TimerBackdrop) { Native.KillTimer(h, TimerBackdrop); RebuildBackdrop(); Frame(); Trim(); }
                 else if ((nuint)wp == TimerSave) { Native.KillTimer(h, TimerSave); SaveNow(); }
+                else if ((nuint)wp == TimerReveal) { Native.KillTimer(h, TimerReveal); if (_target == 0) SendToBottom(); }
                 return 0;
 
             case Native.WM_DISPLAYCHANGE:

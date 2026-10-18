@@ -153,10 +153,10 @@ internal static unsafe partial class Native
     public static bool StartsWithWindows() => RegString(RunKey, "ClusterWidget") != null;
 
     /// <summary>Adds or removes the per-user Run entry that launches this exe at sign-in.</summary>
-    public static void SetStartsWithWindows(bool on)
+    public static void SetStartsWithWindows(bool on, string? exe = null)
     {
         if (!on) { RegDeleteKeyValue(HKEY_CURRENT_USER, RunKey, "ClusterWidget"); return; }
-        string cmd = "\"" + Environment.ProcessPath + "\"";
+        string cmd = "\"" + (exe ?? Environment.ProcessPath) + "\"";
         fixed (char* p = cmd) RegSetKeyValue(HKEY_CURRENT_USER, RunKey, "ClusterWidget", 1 /* REG_SZ */, p, (uint)((cmd.Length + 1) * sizeof(char)));
     }
 

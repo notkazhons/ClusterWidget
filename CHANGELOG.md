@@ -5,6 +5,15 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Setup wizard: running the exe from a download offers to install it to `%LOCALAPPDATA%\Programs\ClusterWidget` with a Start menu shortcut, an "Installed apps" entry and an optional start with Windows. `--uninstall` removes it. `--portable` or a `portable.txt` skips the setup.
+- First run shows a welcome and opens the settings, so a new install is not a silent nothing.
+- Starting the exe while it is already running shows the clusters and the settings window instead of exiting silently.
+- Tray menu: *Show clusters*.
+
+### Fixed
+- A new cluster, and the clusters on first run, are lifted above the open windows for a few seconds so they can be found (clusters normally sit on the desktop, under your windows).
+
 ## [1.1.0] - 2026-10-18
 
 ### Added

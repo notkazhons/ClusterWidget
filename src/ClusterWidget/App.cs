@@ -14,6 +14,11 @@ namespace ClusterWidget;
 internal static unsafe class App
 {
     private const uint WM_TRAY = Native.WM_APP + 3, WM_FILES_CHANGED = Native.WM_APP + 1, WM_KB_TAB = Native.WM_APP + 4;
+    /// <summary>Posted by a second launch: show the clusters and the settings window.</summary>
+    public const uint WM_SHOW_SELF = Native.WM_APP + 5;
+    /// <summary>Posted by the installer to close this running copy.</summary>
+    public const uint WM_QUIT_SELF = Native.WM_APP + 6;
+    private static bool _firstRun;
     private const nuint MagicExtra = 0x43574B42; // marks the keys this app sends itself ("CWKB"), so its own hook ignores them
     private const nuint TimerSync = 1;
 
@@ -32,6 +37,7 @@ internal static unsafe class App
         Native.InitCommonControlsEx(new INITCOMMONCONTROLSEX { dwSize = (uint)sizeof(INITCOMMONCONTROLSEX), dwICC = 0xC /* BAR | TAB */ });
 
         CreateAppWindow();
+        _firstRun = !Directory.Exists(Config.ClustersDir) || !Directory.EnumerateFiles(Config.ClustersDir, "*.json").Any();
         MigrateAndLoad();
         AddTrayIcon();
         StartWatcher();
@@ -40,6 +46,7 @@ internal static unsafe class App
         _fgHook = Native.SetWinEventHook(0x3 /* EVENT_SYSTEM_FOREGROUND */, 0x3, 0, (nint)(delegate* unmanaged[Stdcall]<nint, uint, nint, int, int, uint, uint, void>)&ForegroundChanged, 0, 0, 0);
         UpdateKeyboardHook(Native.GetForegroundWindow());
         Native.EmptyWorkingSet(Native.GetCurrentProcess());
+        if (_firstRun) Native.PostMessage(_hwnd, WM_SHOW_SELF, 1, 0);
 
         while (Native.GetMessage(out MSG m, 0, 0, 0) > 0)
         {
@@ -56,6 +63,20 @@ internal static unsafe class App
     }
 
     public static void Quit() => Native.PostQuitMessage(0);
+
+    /// <summary>Clusters sit on the desktop layer, under open windows. This lifts them all for a moment so they can be seen.</summary>
+    public static void RevealAll() { foreach (var w in Widgets) w.Reveal(); }
+
+    private static void ShowSelf(bool welcome)
+    {
+        if (Widgets.Count == 0) return;
+        RevealAll();
+        if (welcome)
+            Native.MessageBox(0, "ClusterWidget is running.\n\nYour cluster is a box on the desktop. It sits under your open windows, so press Win+D (or minimize them) to see it. " +
+                "Drag shortcuts, files or folders onto it to add them.\n\nThe icon in the system tray (near the clock) opens the settings, or shows the clusters again.",
+                "ClusterWidget", 0x40 /* MB_ICONINFORMATION */);
+        SettingsWindow.Show(SettingsWindow.Target ?? Widgets[0]);
+    }
 
     // ---------------------------------------------------------------- keyboard navigation between the desktop and the clusters
 
@@ -192,6 +213,7 @@ internal static unsafe class App
         Widgets.Add(w);
         w.Create();
         w.CenterOnScreen(); // a new cluster always appears in the middle of the screen
+        w.Reveal();         // and is lifted above the open windows for a moment, so it is seen
         return w;
     }
 
@@ -254,13 +276,15 @@ internal static unsafe class App
                 case WM_TRAY:
                     switch ((uint)(l & 0xFFFF))
                     {
-                        case 0x202 /* WM_LBUTTONUP */: if (Widgets.Count > 0) SettingsWindow.Show(SettingsWindow.Target ?? Widgets[0]); break;
+                        case 0x202 /* WM_LBUTTONUP */: ShowSelf(false); break;
                         case 0x205 /* WM_RBUTTONUP */: TrayMenu(); break;
                     }
                     return 0;
                 case WM_KB_TAB:
                     EnterClusters(w != 0);
                     return 0;
+                case WM_SHOW_SELF: ShowSelf(w != 0); return 0;
+                case WM_QUIT_SELF: Quit(); return 0;
                 case WM_FILES_CHANGED:
                     Native.SetTimer(h, TimerSync, 300, 0); // debounce: editors write in bursts
                     return 0;
@@ -317,12 +341,14 @@ internal static unsafe class App
         for (int i = 0; i < Widgets.Count; i++)
             Native.AppendMenu(menu, 0, (nuint)(100 + i), $"Settings: {Widgets[i].Cfg.Name}");
         Native.AppendMenu(menu, 0x800, 0, null);
+        Native.AppendMenu(menu, 0, 3, "Show clusters");
         Native.AppendMenu(menu, 0, 1, "New cluster");
         Native.AppendMenu(menu, 0, 2, "Exit");
         Native.SetForegroundWindow(_hwnd); // required so the menu closes when you click away
         int cmd = Native.TrackPopupMenu(menu, 0x100 | 0x2 /* RETURNCMD | RIGHTBUTTON */, pt.X, pt.Y, 0, _hwnd, 0);
         Native.DestroyMenu(menu);
         if (cmd == 1) SettingsWindow.Show(NewCluster(SettingsWindow.Target ?? (Widgets.Count > 0 ? Widgets[0] : null)));
+        else if (cmd == 3) RevealAll();
         else if (cmd == 2) Quit();
         else if (cmd >= 100 && cmd - 100 < Widgets.Count) SettingsWindow.Show(Widgets[cmd - 100]);
     }

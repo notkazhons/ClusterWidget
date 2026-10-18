@@ -43,8 +43,17 @@ nothing while you are not using it.
 3. Drop shortcuts, folders or programs onto the box that appears. Right-click it for settings.
 
 Windows 11 (x64). The app is not code-signed, so Windows SmartScreen may warn the first time: choose *More info*, then *Run anyway*.
-To start it with Windows, turn on *Start with Windows* (Settings, Behavior tab). To remove it, delete the folder and
-`%APPDATA%\ClusterWidget`.
+The first time you run `ClusterWidget.exe` from a download, a short setup asks to **install** it: it copies itself to
+`%LOCALAPPDATA%\Programs\ClusterWidget`, adds a Start menu shortcut and an entry under *Settings > Apps > Installed apps*,
+and asks whether to start with Windows. You can then delete the downloaded files. No administrator rights are needed.
+Choose *No* to run it once without installing, or put a file named `portable.txt` next to the exe (or start it with
+`--portable`) to skip the setup for good.
+
+Your clusters are boxes on the **desktop**, below your open windows. Press **Win+D** to see them, or use the tray icon
+(*Show clusters*). Starting the exe again while it runs shows the clusters and the settings window.
+
+To uninstall, use *Installed apps* (or run the installed exe with `--uninstall`). Your clusters in `%APPDATA%\ClusterWidget`
+are kept unless you choose to delete them.
 
 ### If Windows won't let you run it
 
