@@ -5,6 +5,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-18
+
 ### Added
 - Setup wizard: running the exe from a download offers to install it to `%LOCALAPPDATA%\Programs\ClusterWidget` with a Start menu shortcut, an "Installed apps" entry and an optional start with Windows. `--uninstall` removes it. `--portable` or a `portable.txt` skips the setup.
 - First run shows a welcome and opens the settings, so a new install is not a silent nothing.
