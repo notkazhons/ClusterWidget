@@ -184,8 +184,23 @@ internal sealed unsafe class Widget
         _hwnd = Native.CreateWindowEx(WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_ACCEPTFILES, "ClusterWidgetWindow",
             "ClusterWidget", Native.WS_POPUP, 0, 0, 100, 100, 0, 0, inst, 0);
         Map[_hwnd] = this;
-        Native.SetWindowLongPtr(_hwnd, -8 /* GWLP_HWNDPARENT: sets the owner */, Native.GetShellWindow());
+        Reown(Native.GetShellWindow());
         Native.DragAcceptFiles(_hwnd, 1);
+    }
+
+    private nint _owner;
+
+    /// <summary>
+    /// Makes <paramref name="desktop"/> the owner. Win+D raises whichever window hosts the desktop icons, which is a WorkerW
+    /// rather than Progman on some setups; the cluster has to be owned by that one to ride along.
+    /// </summary>
+    public void Reown(nint desktop)
+    {
+        if (_hwnd == 0 || desktop == 0 || desktop == _owner) return;
+        _owner = desktop;
+        _allowZ = true;
+        Native.SetWindowLongPtr(_hwnd, -8 /* GWLP_HWNDPARENT: sets the owner */, desktop);
+        _allowZ = false;
     }
 
     // ---------------------------------------------------------------- config / slots

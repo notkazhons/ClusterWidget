@@ -98,6 +98,7 @@ internal static unsafe class App
     private static void UpdateKeyboardHook(nint foreground)
     {
         bool desktop = Widgets.Count > 0 && IsDesktop(foreground);
+        if (desktop) foreach (var w in Widgets) w.Reown(foreground);
         if (desktop && _kbHook == 0)
             _kbHook = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, (nint)(delegate* unmanaged[Stdcall]<int, nint, nint, nint>)&KeyboardHook, Native.GetModuleHandle(0), 0);
         else if (!desktop) RemoveKeyboardHook();
