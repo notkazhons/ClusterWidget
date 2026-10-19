@@ -5,6 +5,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-18
+
+### Fixed
+- Clusters no longer disappear on Win+D. Each cluster is now owned by whichever desktop window (Progman or a WorkerW) comes to the front, instead of only Progman.
+
 ## [1.2.0] - 2026-10-18
 
 ### Added
