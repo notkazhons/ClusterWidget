@@ -5,6 +5,14 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-20
+
+### Added
+- *Apply to all clusters* button in the settings: gives every cluster the current cluster's look and layout and saves. Icons, names and positions are kept.
+
+### Changed
+- Settings status text shortened to "Unsaved changes" to make room for the new button.
+
 ## [1.2.1] - 2026-10-18
 
 ### Fixed

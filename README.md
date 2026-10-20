@@ -62,7 +62,7 @@ access the specified device, path, or file. You may not have the appropriate per
 removes the file. Try these in order:
 
 1. **Unblock the zip before unzipping.** Right-click the downloaded `.zip`, choose *Properties*, tick **Unblock** at the
-   bottom, press OK, and only then extract it. (Or in PowerShell: `Unblock-File .\ClusterWidget-1.2.1-win-x64.zip`.)
+   bottom, press OK, and only then extract it. (Or in PowerShell: `Unblock-File .\ClusterWidget-1.3.0-win-x64.zip`.)
 2. **Extract it first.** Do not run it from inside the zip. Unzip to a normal folder such as `C:\Tools\ClusterWidget` or
    your Documents (not Program Files, not a network drive).
 3. **Windows Security may have removed it.** Open *Windows Security, Virus & threat protection, Protection history*. If
@@ -71,7 +71,7 @@ removes the file. Try these in order:
 5. **Smart App Control** (Windows 11, Settings, Privacy & security, Windows Security, App & browser control) blocks
    unsigned programs while it is **On**. Switch it to Off, or build the app yourself (see below).
 
-You can verify the download with the `.sha256` file on the release page: `Get-FileHash .\ClusterWidget-1.2.1-win-x64.zip`
+You can verify the download with the `.sha256` file on the release page: `Get-FileHash .\ClusterWidget-1.3.0-win-x64.zip`
 should print the same value. The source is all here, and building it yourself gives you an exe your own machine trusts.
 
 ## Using it
