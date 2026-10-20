@@ -23,6 +23,7 @@ internal sealed unsafe class SettingsWindow
     private static readonly string[] PageNames = { "Look", "Picture", "Icons", "Size and spacing", "Behavior", "About" };
 
     private const int IdApply = 1, IdCancel = 2,   // IDOK / IDCANCEL: Enter and Esc work like in any dialog
+        IdApplyAll = 404,
         IdCluster = 400, IdRename = 401, IdNewCluster = 402, IdDeleteCluster = 403,
         IdDesign = 410, IdSaveDesign = 411, IdDeleteDesign = 412, IdTab = 420,
         IdPreset = 300, IdSnap = 301, IdLabels = 302, IdReset = 303, IdAutoGrid = 304, IdStartup = 305, IdGear = 306,
@@ -110,7 +111,7 @@ internal sealed unsafe class SettingsWindow
     private Widget _w;
     private nint _hwnd, _font, _boldFont, _tab, _tip, _clusterCombo, _designCombo, _presetCombo, _gearCombo, _expandFromCombo,
         _snapCheck, _labelsCheck, _autoGridCheck, _clusterPreviewCheck, _clickLaunchCheck, _startupCheck, _gearAlwaysCheck,
-        _imageName, _lookNote, _previewToggle, _gearToggle, _applyBtn, _cancelBtn, _status, _pageBrush;
+        _imageName, _lookNote, _previewToggle, _gearToggle, _applyBtn, _applyAllBtn, _cancelBtn, _status, _pageBrush;
     private float _s = 1f;
     private readonly List<nint>[] _pages = Enumerable.Range(0, PageNames.Length).Select(_ => new List<nint>()).ToArray();
     private readonly int[] _pageY = new int[PageNames.Length];
@@ -268,11 +269,13 @@ internal sealed unsafe class SettingsWindow
 
         // ---- bottom bar: status on the left, Apply / Cancel on the right
         int bar = tabTop + tabH + 12;
-        _status = Ctl(-1, "STATIC", "", 0, 16, bar + 8, 250, 20, 0);
+        _status = Ctl(-1, "STATIC", "", 0, 16, bar + 8, 130, 20, 0);
         _labels.Remove(_status); _hints.Add(_status);
-        _applyBtn = Ctl(-1, "BUTTON", "Apply changes", 0x1 /* DEFPUSHBUTTON */ | 0x10000, 292, bar, 140, 32, IdApply,
+        _applyAllBtn = Ctl(-1, "BUTTON", "Apply to all clusters", 0x10000, 152, bar, 164, 32, IdApplyAll,
+            "Give every cluster this cluster's look and layout, and save. Each cluster keeps its own icons, name and position.");
+        _applyBtn = Ctl(-1, "BUTTON", "Apply changes", 0x1 /* DEFPUSHBUTTON */ | 0x10000, 322, bar, 130, 32, IdApply,
             "Keep all the changes you made. Until you press this, they are only a preview and are not saved.");
-        _cancelBtn = Ctl(-1, "BUTTON", "Close", 0x10000, 440, bar, 108, 32, IdCancel,
+        _cancelBtn = Ctl(-1, "BUTTON", "Close", 0x10000, 458, bar, 86, 32, IdCancel,
             "Undo everything since your last Apply and close this window. With nothing to undo it just closes.");
 
         TakeSnap(_w);
@@ -561,7 +564,8 @@ internal sealed unsafe class SettingsWindow
         bool dirty = IsDirty();
         Native.EnableWindow(_applyBtn, dirty ? 1 : 0);
         Native.SetWindowText(_cancelBtn, dirty ? "Cancel" : "Close");
-        Native.SetWindowText(_status, dirty ? "Unsaved changes (live preview)" : "All changes saved");
+        Native.SetWindowText(_status, dirty ? "Unsaved changes" : "All changes saved");
+        Native.EnableWindow(_applyAllBtn, App.Widgets.Count > 1 ? 1 : 0);
     }
 
     private void RefreshClusters()
@@ -605,6 +609,19 @@ internal sealed unsafe class SettingsWindow
             w.SaveNow(); _snaps[w] = w.Cfg.Clone();
         }
         UpdateDirty();
+    }
+
+    /// <summary>Copies this cluster's design to every other cluster (snapped first, so nothing is lost until saved), then saves all.</summary>
+    private void ApplyToAll()
+    {
+        foreach (var w in App.Widgets.ToArray())
+        {
+            if (w == _w) continue;
+            TakeSnap(w);
+            w.Cfg.ApplyDesign(_w.Cfg);
+            w.LookChanged(true);
+        }
+        Apply();
     }
 
     private void Cancel()
@@ -884,6 +901,7 @@ internal sealed unsafe class SettingsWindow
         switch (id)
         {
             case IdApply: if (IsDirty()) Apply(); break;
+            case IdApplyAll: ApplyToAll(); break;
             case IdCancel: Cancel(); break;
 
             case IdCluster when code == 1 /* CBN_SELCHANGE */:
