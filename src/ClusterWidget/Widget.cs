@@ -373,15 +373,13 @@ internal sealed unsafe class Widget
         {
             int xmin = (int)Math.Ceiling((mi.rcWork.Left - _ox - gap) / (double)_cw), xmax = (int)Math.Floor((mi.rcWork.Right - _ox - gap - bw) / (double)_cw);
             int ymin = (int)Math.Ceiling((mi.rcWork.Top - _oy - gap) / (double)_ch), ymax = (int)Math.Floor((mi.rcWork.Bottom - _oy - gap - bh) / (double)_ch);
-            _cfg.X = Math.Clamp(_cfg.X, xmin, Math.Max(xmin, xmax));
-            _cfg.Y = Math.Clamp(_cfg.Y, ymin, Math.Max(ymin, ymax));
-            closed = Layout.Clamp(new CellRect(_ox + _cfg.X * _cw + gap, _oy + _cfg.Y * _ch + gap, bw, bh), bounds);
+            // The clamp only decides what is shown. The saved cell stays as the user left it, so a monitor that is
+            // missing at startup (or a passing display change) cannot overwrite it; a drag commits it (CommitPosition).
+            int cx = Math.Clamp(_cfg.X, xmin, Math.Max(xmin, xmax));
+            int cy = Math.Clamp(_cfg.Y, ymin, Math.Max(ymin, ymax));
+            closed = Layout.Clamp(new CellRect(_ox + cx * _cw + gap, _oy + cy * _ch + gap, bw, bh), bounds);
         }
-        else
-        {
-            closed = Layout.Clamp(new CellRect(_cfg.FreeX, _cfg.FreeY, bw, bh), bounds);
-            _cfg.FreeX = closed.X; _cfg.FreeY = closed.Y;
-        }
+        else closed = Layout.Clamp(new CellRect(_cfg.FreeX, _cfg.FreeY, bw, bh), bounds);
         int ow = (int)Math.Ceiling(_w1), oh = (int)Math.Ceiling(_h1);
         var open = _stickyTopLeft is POINT tl
             ? Layout.Clamp(new CellRect(tl.X, tl.Y, Math.Min(Math.Max(ow, bw), workW), Math.Min(Math.Max(oh, bh), workH)), bounds)
@@ -1496,8 +1494,20 @@ internal sealed unsafe class Widget
         }
         long t0 = Perf.Start();
         Relayout();
+        CommitPosition();
         Frame();
         _dragFrames.Add(Perf.Ms(t0));
+    }
+
+    /// <summary>Stores where the closed box actually sits (after clamping to the screen) as the saved position.</summary>
+    private void CommitPosition()
+    {
+        if (_cfg.Snap)
+        {
+            _cfg.X = (int)Math.Round((_pa.Left - (int)(_cfg.Gap * _scale) - _ox) / (double)_cw);
+            _cfg.Y = (int)Math.Round((_pa.Top - (int)(_cfg.Gap * _scale) - _oy) / (double)_ch);
+        }
+        else { _cfg.FreeX = _pa.Left; _cfg.FreeY = _pa.Top; }
     }
 
     /// <summary>Writes the hover/drag timing series (perf mode only).</summary>
